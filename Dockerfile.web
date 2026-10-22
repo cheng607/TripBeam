@@ -1,0 +1,27 @@
+FROM node:22-alpine AS builder
+WORKDIR /app
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY apps/web/package.json apps/web/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY packages/contracts packages/contracts
+COPY apps/web apps/web
+
+# Leave empty in production to make the browser call the same origin.
+ARG VITE_API_BASE_URL=
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ARG VITE_MAP_TILE_URL
+ENV VITE_MAP_TILE_URL=$VITE_MAP_TILE_URL
+ARG VITE_MAP_ATTRIBUTION=地图数据服务商
+ENV VITE_MAP_ATTRIBUTION=$VITE_MAP_ATTRIBUTION
+ARG VITE_MAP_COORDINATE_SYSTEM=wgs84
+ENV VITE_MAP_COORDINATE_SYSTEM=$VITE_MAP_COORDINATE_SYSTEM
+RUN pnpm --filter @tripbeam/web build
+
+FROM nginx:1.27-alpine
+COPY deploy/nginx-app.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
+EXPOSE 80
