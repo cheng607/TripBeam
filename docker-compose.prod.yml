@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tripbeam
+      POSTGRES_USER: tripbeam
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - tripbeam_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tripbeam -d tripbeam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 3101
+      DATABASE_URL: postgres://tripbeam:${POSTGRES_PASSWORD}@postgres:5432/tripbeam
+      WEB_ORIGIN: ${WEB_ORIGIN:?set WEB_ORIGIN}
+      AMAP_WEB_KEY: ${AMAP_WEB_KEY:?set AMAP_WEB_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DIFY_API_KEY: ${DIFY_API_KEY:-}
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-http://dify-api:5001}
+      DIFY_WORKFLOW_PATH: ${DIFY_WORKFLOW_PATH:-/v1/workflows/run}
+      DEMO_MAP: "false"
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      PLANNER_INTERNAL_TOKEN: ${PLANNER_INTERNAL_TOKEN:?set PLANNER_INTERNAL_TOKEN}
+    ports:
+      - "3101:3101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  tripbeam_pg:

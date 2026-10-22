@@ -1,0 +1,13 @@
+{
+  "name": "tripbeam",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @tripbeam/web --filter @tripbeam/api dev",
+    "dev:api": "pnpm --filter @tripbeam/api dev",
+    "build": "pnpm --filter @tripbeam/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "smoke:real": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke-real.ps1"
+  }
+}

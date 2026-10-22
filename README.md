@@ -1,0 +1,54 @@
+# TripBeam
+
+面向陌生城市短时出行的规划应用。React 页面通过 Fastify API 访问高德 Web 服务获取真实地点与路网几何；确定性 Planner 做 8km 筛选、束搜索、时间排期和约束校验。DeepSeek 只提取用户明确表达的偏好，以及改写已验证路线的推荐理由，不能产生路线、距离、时间或合法性结论。
+
+## 本地启动
+
+要求 Node.js 22+、pnpm 11+。在项目根目录执行 `pnpm install`。**不要将 API Key 放入前端环境变量、提交到仓库或贴入聊天。已公开的密钥应先轮换。**
+
+复制 `apps/api/.env.example` 为 `apps/api/.env`，在本机填写 `AMAP_WEB_KEY` 与轮换后的 `DEEPSEEK_API_KEY`。API 启动时自动读取 `apps/api/.env`；也可用部署环境变量注入。`DEEPSEEK_BASE_URL` 默认 `https://api.deepseek.com`，模型默认 `deepseek-chat`。前端可选复制 `apps/web/.env.example` 为 `apps/web/.env`，仅配置公开的 API 地址、底图 URL 与 attribution；**不要在 `VITE_*` 变量中放服务端密钥**。
+
+```powershell
+pnpm dev
+```
+
+浏览器打开 `http://localhost:4173/`，API 默认监听 `http://127.0.0.1:3101`。访问 `/health` 可检查地图和模型是否已配置，不会暴露密钥。若使用不同端口/域名，设置 `VITE_API_BASE_URL` 和 `WEB_ORIGIN`（允许多个源，以逗号分隔）。
+
+本地默认使用 `apps/api/data/itineraries.json` 持久化，适用于单进程开发。生产环境设置 `DATABASE_URL` 后改用 PostgreSQL，服务首次连接时创建 `tripbeam_plans`、`tripbeam_shares` 表；编辑和分享使用事务及版本检查。应由部署平台管理数据库凭据、TLS、备份、用户鉴权和访问控制。当前匿名 API 适合受控的 MVP 环境，**不要直接作为公开多用户服务上线**。
+
+## 正式环境上线前检查
+
+生产环境至少设置 `NODE_ENV=production`、`API_HOST=0.0.0.0`、`DATABASE_URL`、`WEB_ORIGIN`、`AMAP_WEB_KEY`、`PLANNER_INTERNAL_TOKEN`，并将 `DEMO_MAP=false`。启动后先检查 `/ready`，返回 `{"status":"ready"}` 才允许接入流量；`/health` 仅表示进程存活，不代表依赖已就绪。生产环境不要使用 OSM 公共瓦片，前端应配置符合服务条款的瓦片服务。部署示例见 `Dockerfile.api` 和 `docker-compose.prod.yml`。
+
+本地 PostgreSQL 可使用 `docker-compose.local.yml`：先启动 Docker Desktop，再运行 `docker compose -f docker-compose.local.yml up -d`，然后在 `apps/api/.env` 设置 `DATABASE_URL=postgresql://tripbeam:tripbeam_local_change_me@127.0.0.1:5432/tripbeam`。API 首次连接会自动创建业务表；确认 `/health` 返回 `storageMode=postgres` 后，再运行 `pnpm smoke:real`。
+
+当前仍需由部署方完成的外部事项：高德 Web 服务 Key 的域名/IP 白名单、配额与账单；DeepSeek 或 Dify 的正式 API Key、限流和账单；PostgreSQL 备份、TLS、监控告警；前端域名 HTTPS、反向代理和正式地图瓦片授权。项目已实现匿名 Session 令牌和接口限流，但尚未接入用户账户、团队权限、计费和审计系统；若面向公网多用户，需在网关增加身份认证和 WAF。
+
+## 功能流程
+
+1. 首页文本经 DeepSeek 提取偏好；模型不可用时回退为手动补充弹窗。填写出发点、开始时间、1–4 小时、游玩及出行偏好。
+2. 后端查询真实 POI，8km 内初筛；束搜索生成候选路线，用高德路网查询每段时间、距离和 geometry，再由程序重新排期、校验。正常返回至少两条；不足时显式降级，完全无法满足时返回错误，不使用示意地图或虚构路线。
+3. 对比页在真实底图叠加全部路线，当前路线高亮、其他路线淡化。不同方案使用显著不同的颜色。
+4. 编辑页可增删、替换和调整地点顺序。每次编辑携带 `baseVersion`，后端重新查询路网并校验后才更新版本。保存后才能创建不可变分享快照。
+5. 地图瓦片加载失败时仍保留路线事实和地点清单，不由模型猜测路径。营业、预约及现场信息需要出发前核实。
+
+路线时间为基于开始时间、路网时长、建议停留和 10 分钟缓冲的**规划估计**；尚无实时营业、实时交通、预约或用户账户接入。公开底图默认使用 OSM 瓦片并显示 attribution；生产流量请配置符合服务条款的瓦片提供方。高德服务端坐标在地图展示前转换为 WGS-84，避免路线与底图错位。
+
+## 架构与接口
+
+- `apps/web`：React/Vite、响应式首页、对比、编辑与分享页面；只显示服务端返回的路线事实。
+- `apps/api/src/deepseek.ts`：受限的意图提取、推荐文案和 JSON 校验。
+- `apps/api/src/maps.ts`：高德地点、POI 和真实路网适配器，服务端密钥、超时和短缓存。
+- `apps/api/src/planner.ts`：Haversine 初筛、束搜索、排期、约束校验与编辑重算。
+- `apps/api/src/store.ts` / `pg-store.ts`：本地文件存储 / PostgreSQL 事务存储、乐观锁和不可变分享快照。
+- `packages/contracts`：前后端共享 Zod Schema，`docs/openapi.yaml`：OpenAPI 3.1 契约。
+
+主要端点：`POST /v1/conversations/{conversationId}/messages`、`POST /v1/itineraries/generate`、`GET /v1/itineraries/{id}`、`POST /v1/itineraries/{id}/routes/{routeId}/edits`、`POST /v1/itineraries/{id}/save`、`POST /v1/itineraries/{id}/share`、`GET /v1/shares/{token}`。完整请求与响应见 OpenAPI。
+
+```powershell
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+自动化测试用隔离的地图/模型替身验证业务规则，不会消耗真实 API 配额。真实外部联调需本地配置有效凭据，并核对高德密钥的 Web 服务权限、额度及所在网络可用性。

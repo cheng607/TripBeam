@@ -1,0 +1,14 @@
+FROM node:22-alpine
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY apps/api/package.json apps/api/package.json
+RUN pnpm install --frozen-lockfile --prod=false
+COPY packages/contracts packages/contracts
+COPY apps/api apps/api
+RUN pnpm --filter @tripbeam/api typecheck
+ENV NODE_ENV=production
+ENV API_HOST=0.0.0.0
+EXPOSE 3101
+CMD ["pnpm", "--filter", "@tripbeam/api", "start"]

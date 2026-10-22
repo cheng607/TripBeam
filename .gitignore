@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+apps/web/dist/
+apps/api/data/
+apps/api/*.tmp
+.env
+.env.*
+!.env.example
+*.log

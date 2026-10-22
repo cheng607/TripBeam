@@ -1,0 +1,10 @@
+{
+  "name": "@tripbeam/contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit --pretty false", "test": "vitest run" },
+  "dependencies": { "zod": "^4.1.0" },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^4.0.0" }
+}

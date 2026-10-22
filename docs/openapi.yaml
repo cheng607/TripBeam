@@ -1,0 +1,498 @@
+openapi: 3.1.0
+info:
+  title: TripBeam API
+  version: 1.0.0
+  description: >-
+    Browser calls only this BFF. LLM output is limited to preference extraction;
+    routing, scheduling, filtering and constraint validation are deterministic services.
+servers:
+  - url: http://127.0.0.1:3101
+paths:
+  /health:
+    get:
+      summary: Service health check
+      responses:
+        '200':
+          description: Service is available
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status, mapConfigured, llmConfigured]
+                properties:
+                  status: { type: string, const: ok }
+                  mapConfigured: { type: boolean }
+                  llmConfigured: { type: boolean }
+  /ready:
+    get:
+      summary: Dependency readiness check
+      responses:
+        '200':
+          description: Service is ready to receive traffic
+        '503':
+          description: Required production dependency is not configured
+  /v1/sessions:
+    post:
+      summary: Create an anonymous planning session
+      responses:
+        '201':
+          description: Session created
+  /v1/sessions/{id}/turns:
+    post:
+      summary: Process one multi-turn planning or editing request
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: x-session-token
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [turnId, text]
+              properties:
+                turnId: { type: string, format: uuid }
+                text: { type: string, maxLength: 1000 }
+                action: { type: string, enum: [message, confirm_preferences, regenerate, explain_route] }
+                itineraryId: { type: string, format: uuid }
+                routeId: { type: string, format: uuid }
+                baseVersion: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Turn result }
+        '401': { description: Invalid session token }
+  /v1/preferences/validate:
+    post:
+      summary: Validate a complete structured preference before planning
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PreferenceDraft' }
+      responses:
+        '200':
+          description: Preference accepted; no route has been generated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreferenceValidationResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /v1/conversations/{conversationId}/messages:
+    post:
+      summary: Extract explicitly stated preferences from free text
+      description: >-
+        This endpoint never performs route generation, travel-time calculations,
+        POI selection or constraint decisions.
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '200':
+          description: Validated extraction or deterministic fallback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClarificationResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /v1/locations/resolve:
+    post:
+      operationId: resolveLocation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        '200':
+          description: Resolved real location
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requestId, place, city]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  place: { $ref: '#/components/schemas/Place' }
+                  city: { type: string }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/generate:
+    post:
+      operationId: generateItinerary
+      description: Deterministic POI filtering, beam search, road-network routing, scheduling and validation. LLM may only rewrite recommendation copy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PreferenceDraft' }
+      responses:
+        '201': { $ref: '#/components/responses/Itinerary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}:
+    get:
+      operationId: getItinerary
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+      responses:
+        '200': { $ref: '#/components/responses/Itinerary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}/routes/{routeId}/alternatives:
+    get:
+      operationId: listAlternativePois
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+        - $ref: '#/components/parameters/RouteId'
+      responses:
+        '200':
+          description: Candidate POIs collected for this itinerary
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requestId, alternatives]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  alternatives: { type: array, items: { $ref: '#/components/schemas/Poi' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}/routes/{routeId}/edits:
+    post:
+      operationId: editRoute
+      description: Recalculates all legs and stop times after a remove, reorder, add or replace command.
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+        - $ref: '#/components/parameters/RouteId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EditCommand' }
+      responses:
+        '200': { $ref: '#/components/responses/Itinerary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}/save:
+    post:
+      operationId: saveItinerary
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [baseVersion]
+              properties:
+                baseVersion: { type: integer, minimum: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/Itinerary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}/share:
+    post:
+      operationId: createShareSnapshot
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [routeId]
+              properties:
+                routeId: { type: string, format: uuid }
+      responses:
+        '201': { $ref: '#/components/responses/Share' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ValidationError' }
+  /v1/shares/{token}:
+    get:
+      operationId: getShareSnapshot
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string, minLength: 24, maxLength: 128 }
+      responses:
+        '200': { $ref: '#/components/responses/Share' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+components:
+  parameters:
+    ItineraryId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+    RouteId:
+      in: path
+      name: routeId
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Itinerary:
+      description: Server-versioned itinerary
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ItineraryResponse' }
+    Share:
+      description: Immutable share snapshot
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ShareResponse' }
+    ValidationError:
+      description: Request body does not meet the API contract
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+  schemas:
+    Coordinate:
+      type: object
+      additionalProperties: false
+      required: [lat, lng]
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+    Place:
+      type: object
+      additionalProperties: false
+      required: [label, address, coordinate]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 160 }
+        address: { type: string, maxLength: 240 }
+        coordinate: { $ref: '#/components/schemas/Coordinate' }
+    Poi:
+      type: object
+      additionalProperties: false
+      required: [id, name, category, tags, place, stayMinutes]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        category: { type: string, minLength: 1, maxLength: 40 }
+        tags: { type: array, maxItems: 8, items: { type: string, minLength: 1, maxLength: 30 } }
+        place: { $ref: '#/components/schemas/Place' }
+        stayMinutes: { type: integer, minimum: 10, maximum: 180 }
+    RouteLeg:
+      type: object
+      additionalProperties: false
+      required: [fromId, toId, mode, durationMinutes, distanceMeters, geometry]
+      properties:
+        fromId: { type: string, minLength: 1 }
+        toId: { type: string, minLength: 1 }
+        mode: { $ref: '#/components/schemas/TravelPreference' }
+        durationMinutes: { type: integer, minimum: 1, maximum: 120 }
+        distanceMeters: { type: integer, minimum: 0, maximum: 20000 }
+        geometry: { type: array, minItems: 2, maxItems: 3000, items: { $ref: '#/components/schemas/Coordinate' } }
+    ScheduledStop:
+      type: object
+      additionalProperties: false
+      required: [poiId, arrivalMinuteOffset, departureMinuteOffset]
+      properties:
+        poiId: { type: string, minLength: 1 }
+        arrivalMinuteOffset: { type: integer, minimum: 0, maximum: 240 }
+        departureMinuteOffset: { type: integer, minimum: 0, maximum: 240 }
+    Route:
+      type: object
+      additionalProperties: false
+      required: [id, theme, title, pois, legs, scheduledStops, totalDurationMinutes, totalDistanceMeters, bufferMinutes, walkingIntensity, constraintStatus, recommendationReason, risks]
+      properties:
+        id: { type: string, format: uuid }
+        theme: { type: string, enum: [food_first, photo_first, easy_walk, balanced] }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        pois: { type: array, minItems: 1, maxItems: 8, items: { $ref: '#/components/schemas/Poi' } }
+        legs: { type: array, minItems: 1, maxItems: 8, items: { $ref: '#/components/schemas/RouteLeg' } }
+        scheduledStops: { type: array, minItems: 1, maxItems: 8, items: { $ref: '#/components/schemas/ScheduledStop' } }
+        totalDurationMinutes: { type: integer, minimum: 1, maximum: 240 }
+        totalDistanceMeters: { type: integer, minimum: 0, maximum: 50000 }
+        bufferMinutes: { type: integer, minimum: 0, maximum: 240 }
+        walkingIntensity: { type: string, enum: [low, medium, high] }
+        constraintStatus: { type: string, const: valid }
+        recommendationReason: { type: string, minLength: 1, maxLength: 500 }
+        risks: { type: array, maxItems: 8, items: { type: string, enum: [OPENING_HOURS_UNCERTAIN, MAP_UNAVAILABLE, POI_DATA_PARTIAL, ROUTE_TIME_TIGHT, PREFERENCE_RELAXED, ROUTE_COUNT_LIMITED] } }
+    Itinerary:
+      type: object
+      additionalProperties: false
+      required: [id, version, preference, origin, routes, status, generatedAt, policyVersion, savedVersion]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        preference: { $ref: '#/components/schemas/PreferenceDraft' }
+        origin: { $ref: '#/components/schemas/Place' }
+        routes: { type: array, minItems: 1, maxItems: 3, items: { $ref: '#/components/schemas/Route' } }
+        status: { type: string, enum: [complete, degraded] }
+        generatedAt: { type: string, format: date-time }
+        policyVersion: { type: string, minLength: 1 }
+        savedVersion: { type: [integer, 'null'], minimum: 1 }
+    ItineraryResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, itinerary]
+      properties:
+        requestId: { type: string, format: uuid }
+        itinerary: { $ref: '#/components/schemas/Itinerary' }
+    EditCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [operation, baseVersion, poiId]
+          properties:
+            operation: { type: string, const: remove }
+            baseVersion: { type: integer, minimum: 1 }
+            poiId: { type: string, minLength: 1 }
+        - type: object
+          additionalProperties: false
+          required: [operation, baseVersion, poiIds]
+          properties:
+            operation: { type: string, const: reorder }
+            baseVersion: { type: integer, minimum: 1 }
+            poiIds: { type: array, minItems: 1, maxItems: 8, items: { type: string, minLength: 1 } }
+        - type: object
+          additionalProperties: false
+          required: [operation, baseVersion, poiId]
+          properties:
+            operation: { type: string, const: add }
+            baseVersion: { type: integer, minimum: 1 }
+            poiId: { type: string, minLength: 1 }
+        - type: object
+          additionalProperties: false
+          required: [operation, baseVersion, poiId, replacementPoiId]
+          properties:
+            operation: { type: string, const: replace }
+            baseVersion: { type: integer, minimum: 1 }
+            poiId: { type: string, minLength: 1 }
+            replacementPoiId: { type: string, minLength: 1 }
+      discriminator:
+        propertyName: operation
+    ShareSnapshot:
+      type: object
+      additionalProperties: false
+      required: [token, itineraryId, version, route, origin, preference, createdAt]
+      properties:
+        token: { type: string, minLength: 24, maxLength: 128 }
+        itineraryId: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        route: { $ref: '#/components/schemas/Route' }
+        origin: { $ref: '#/components/schemas/Place' }
+        preference: { $ref: '#/components/schemas/PreferenceDraft' }
+        createdAt: { type: string, format: date-time }
+    ShareResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, snapshot]
+      properties:
+        requestId: { type: string, format: uuid }
+        snapshot: { $ref: '#/components/schemas/ShareSnapshot' }
+    TravelPreference:
+      type: string
+      enum: [步行, 自行车, 公共交通, 打车, 自驾]
+    PreferenceDraft:
+      type: object
+      additionalProperties: false
+      required: [originLabel, startTime, availableMinutes, playPreferences, travelPreferences]
+      properties:
+        originLabel: { type: string, minLength: 1, maxLength: 120 }
+        startTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        availableMinutes: { type: integer, enum: [60, 120, 180, 240] }
+        playPreferences:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items: { type: string, minLength: 1, maxLength: 20 }
+        travelPreferences:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/TravelPreference' }
+    PreferenceExtraction:
+      type: object
+      additionalProperties: false
+      properties:
+        originLabel: { type: string, minLength: 1, maxLength: 120 }
+        startTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        availableMinutes: { type: integer, enum: [60, 120, 180, 240] }
+        playPreferences:
+          type: array
+          maxItems: 3
+          items: { type: string, minLength: 1, maxLength: 20 }
+        travelPreferences:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/TravelPreference' }
+    PreferenceValidationResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, accepted, preference, plannerStatus]
+      properties:
+        requestId: { type: string, format: uuid }
+        accepted: { type: boolean, const: true }
+        preference: { $ref: '#/components/schemas/PreferenceDraft' }
+        plannerStatus: { type: string, const: not_started }
+    ClarificationResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, status, preference, missingFields, message, source]
+      properties:
+        requestId: { type: string, format: uuid }
+        status: { type: string, enum: [needs_user_input, ready_for_planner] }
+        preference: { $ref: '#/components/schemas/PreferenceExtraction' }
+        missingFields:
+          type: array
+          items: { type: string, enum: [originLabel, startTime, availableMinutes, playPreferences, travelPreferences] }
+        message: { type: string, minLength: 1, maxLength: 240 }
+        source: { type: string, enum: [llm, fallback] }
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [requestId, code, message]
+      properties:
+        requestId: { type: string, format: uuid }
+        code: { type: string, enum: [VALIDATION_ERROR, LLM_UNAVAILABLE, LLM_INVALID_RESPONSE, INTERNAL_ERROR, MAP_NOT_CONFIGURED, LOCATION_NOT_FOUND, MAP_UNAVAILABLE, ROUTE_UNAVAILABLE, POI_INSUFFICIENT, CONSTRAINT_VIOLATION, NOT_FOUND, VERSION_CONFLICT, NOT_SAVED] }
+        message: { type: string, minLength: 1, maxLength: 240 }
+        details:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, message]
+            properties:
+              path: { type: string }
+              message: { type: string }
