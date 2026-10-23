@@ -48,7 +48,7 @@ services:
         VITE_MAP_COORDINATE_SYSTEM: ${VITE_MAP_COORDINATE_SYSTEM:-wgs84}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:18080:80"
     depends_on:
       - api
 
