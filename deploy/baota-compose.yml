@@ -42,7 +42,8 @@ services:
       context: ..
       dockerfile: Dockerfile.web
       args:
-        VITE_API_BASE_URL: ""
+        VITE_BASE_PATH: ${TRIPBEAM_BASE_PATH:-/tripbeam}
+        VITE_API_BASE_URL: ${TRIPBEAM_BASE_PATH:-/tripbeam}
         VITE_MAP_TILE_URL: ${VITE_MAP_TILE_URL:?set VITE_MAP_TILE_URL}
         VITE_MAP_ATTRIBUTION: ${VITE_MAP_ATTRIBUTION:-地图数据服务商}
         VITE_MAP_COORDINATE_SYSTEM: ${VITE_MAP_COORDINATE_SYSTEM:-wgs84}
