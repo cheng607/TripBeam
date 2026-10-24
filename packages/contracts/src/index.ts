@@ -10,6 +10,12 @@ export const PreferenceDraftSchema = z.object({
   playPreferences: z.array(z.string().trim().min(1).max(20)).min(1, '请选择至少一个游玩偏好').max(3),
   travelPreferences: z.array(z.enum(TRAVEL_PREFERENCE_OPTIONS)).min(1, '请选择至少一种出行方式'),
   customPreferences: z.array(z.string().trim().min(1).max(30)).max(5).optional(),
+  mustHave: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  niceToHave: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  avoid: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  party: z.enum(['solo', 'couple', 'family', 'senior', 'wheelchair']).optional(),
+  timePolicy: z.enum(['hard', 'flexible']).optional(),
+  mobilityPolicy: z.enum(['hard', 'preferred']).optional(),
   notes: z.string().trim().max(300).optional(),
 }).strict();
 
@@ -26,6 +32,12 @@ export const PreferenceExtractionSchema = z.object({
   playPreferences: z.array(z.string().trim().min(1).max(20)).max(3).optional(),
   travelPreferences: z.array(z.enum(TRAVEL_PREFERENCE_OPTIONS)).min(1).max(5).optional(),
   customPreferences: z.array(z.string().trim().min(1).max(30)).max(5).optional(),
+  mustHave: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  niceToHave: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  avoid: z.array(z.string().trim().min(1).max(40)).max(5).optional(),
+  party: z.enum(['solo', 'couple', 'family', 'senior', 'wheelchair']).optional(),
+  timePolicy: z.enum(['hard', 'flexible']).optional(),
+  mobilityPolicy: z.enum(['hard', 'preferred']).optional(),
   notes: z.string().trim().max(300).optional(),
 }).strict();
 
@@ -69,6 +81,13 @@ export const PoiSchema = z.object({
   tags: z.array(z.string().min(1).max(30)).max(8), place: PlaceSchema,
   stayMinutes: z.number().int().min(10).max(180),
 }).strict();
+export const PoiInsightSchema = z.object({
+  poiId: z.string().min(1),
+  matchedPreferences: z.array(z.string().min(1).max(40)).max(8),
+  evidence: z.array(z.string().min(1).max(160)).max(5),
+  risks: z.array(z.string().min(1).max(160)).max(5),
+  confidence: z.enum(['high', 'medium', 'low']),
+}).strict();
 export const RouteLegSchema = z.object({
   fromId: z.string().min(1), toId: z.string().min(1), mode: z.enum(TRAVEL_PREFERENCE_OPTIONS),
   durationMinutes: z.number().int().min(1).max(120), distanceMeters: z.number().int().min(0).max(20000),
@@ -87,6 +106,10 @@ export const RouteSchema = z.object({
   bufferMinutes: z.number().int().min(0).max(240), walkingIntensity: z.enum(['low', 'medium', 'high']),
   remainingMinutes: z.number().int().min(0).max(240).optional(),
   constraintStatus: z.literal('valid'), recommendationReason: z.string().min(1).max(500),
+  experienceStory: z.string().min(1).max(180).optional(),
+  matchedPreferences: z.array(z.string().min(1).max(40)).max(8).optional(),
+  tradeoff: z.string().min(1).max(180).optional(),
+  poiInsights: z.array(PoiInsightSchema).max(8).optional(),
   risks: z.array(RiskCodeSchema).max(8),
 }).strict();
 export const InvalidDraftSchema = z.object({
@@ -113,6 +136,7 @@ export const ShareSnapshotSchema = z.object({ token: z.string().min(24).max(128)
 export type Coordinate = z.infer<typeof CoordinateSchema>;
 export type Place = z.infer<typeof PlaceSchema>;
 export type Poi = z.infer<typeof PoiSchema>;
+export type PoiInsight = z.infer<typeof PoiInsightSchema>;
 export type RouteLeg = z.infer<typeof RouteLegSchema>;
 export type TripRoute = z.infer<typeof RouteSchema>;
 export type Itinerary = z.infer<typeof ItinerarySchema>;

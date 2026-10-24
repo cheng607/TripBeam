@@ -23,7 +23,7 @@ const map: MapProvider = {
   nearby: async () => candidates,
   leg: async (from, to, mode): Promise<RouteLeg> => ({ fromId: from.label, toId: to.label, mode, durationMinutes: 6, distanceMeters: 450, geometry: [from.coordinate, to.coordinate] }),
 };
-const preference = { originLabel: '春熙路', startTime: '14:00', availableMinutes: 120, playPreferences: ['当地美食', '拍照散步'], travelPreferences: ['步行'] };
+    const preference = { originLabel: '春熙路', startTime: '14:00', availableMinutes: 120, playPreferences: ['当地美食', '拍照散步'], travelPreferences: ['步行'], mustHave: ['当地美食'], avoid: ['不存在的地点'] };
 const folders: string[] = [];
 afterEach(async () => { for (const path of folders.splice(0)) await rm(path, { recursive: true, force: true }); });
 
@@ -38,6 +38,7 @@ describe('deterministic planning API', () => {
     expect(trip.status).toBe('complete');
     expect(trip.routes.length).toBeGreaterThanOrEqual(2);
     expect(trip.routes.every((route) => route.constraintStatus === 'valid' && route.totalDurationMinutes <= 120)).toBe(true);
+    expect(trip.routes.every((route) => route.experienceStory && route.matchedPreferences?.includes('当地美食') && route.poiInsights?.length === route.pois.length)).toBe(true);
     expect(new Set(trip.routes.map((route) => route.pois.map((poi) => poi.id).join('|'))).size).toBe(trip.routes.length);
 
     const route = trip.routes.find((item) => item.pois.length > 1)!;

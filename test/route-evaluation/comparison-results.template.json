@@ -1,0 +1,30 @@
+{
+  "runMetadata": {
+    "dataset": "cases.json",
+    "currentPlannerVersion": "short-trip-v1",
+    "difyWorkflowVersion": "fill-in-before-run",
+    "status": "pending"
+  },
+  "results": [
+    { "caseId": "C01-shanghai-food-bookstore", "current": null, "dify": null, "review": null },
+    { "caseId": "C02-chengdu-tea-food", "current": null, "dify": null, "review": null },
+    { "caseId": "C03-beijing-rainy-culture", "current": null, "dify": null, "review": null },
+    { "caseId": "C04-hangzhou-lakeside-senior", "current": null, "dify": null, "review": null },
+    { "caseId": "C05-guangzhou-night-food", "current": null, "dify": null, "review": null },
+    { "caseId": "C06-shenzhen-design-coffee", "current": null, "dify": null, "review": null },
+    { "caseId": "C07-nanjing-history-vegetarian", "current": null, "dify": null, "review": null },
+    { "caseId": "C08-wuhan-riverside-family", "current": null, "dify": null, "review": null },
+    { "caseId": "C09-xian-quiet-history", "current": null, "dify": null, "review": null },
+    { "caseId": "C10-suzhou-garden-photo", "current": null, "dify": null, "review": null },
+    { "caseId": "C11-chongqing-short-layover", "current": null, "dify": null, "review": null },
+    { "caseId": "C12-qingdao-seaside-beer", "current": null, "dify": null, "review": null },
+    { "caseId": "C13-changsha-music-snacks", "current": null, "dify": null, "review": null },
+    { "caseId": "C14-xiamen-slow-walk", "current": null, "dify": null, "review": null },
+    { "caseId": "C15-tianjin-architecture-dessert", "current": null, "dify": null, "review": null },
+    { "caseId": "C16-fuzhou-tea-tradition", "current": null, "dify": null, "review": null },
+    { "caseId": "C17-kunming-flower-market", "current": null, "dify": null, "review": null },
+    { "caseId": "C18-harbin-winter-indoor", "current": null, "dify": null, "review": null },
+    { "caseId": "C19-jinan-spring-teahouse", "current": null, "dify": null, "review": null },
+    { "caseId": "C20-zhengzhou-museum-accessible", "current": null, "dify": null, "review": null }
+  ]
+}

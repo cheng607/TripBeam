@@ -23,7 +23,7 @@ function RouteCard({ route, index, active, onSelect, onEdit }: { route: TripRout
     <div className="route-topline" /><div className="route-card-heading"><span>方案 {String.fromCharCode(65 + index)}</span>{active && <em>已聚焦</em>}</div>
     <h2>{route.title}</h2><div className="fingerprint">{route.pois.map((poi, poiIndex) => <span key={poi.id}>{poiIndex > 0 && <i>—</i>}{poi.name}</span>)}</div>
     <div className="metrics"><Metric label="总时长" value={formatMinutes(route.totalDurationMinutes)} /><Metric label="总距离" value={`${(route.totalDistanceMeters / 1000).toFixed(1)}km`} /><Metric label="步行强度" value={{ low: '低', medium: '中', high: '高' }[route.walkingIntensity]} /><Metric label="时间余量" value={formatMinutes(route.bufferMinutes)} /></div>
-    <p className="route-reason">{route.recommendationReason}</p>{route.risks.length > 0 && <div className="risk-tags">{route.risks.map((risk) => <span key={risk}>! {riskLabel[risk] ?? risk}</span>)}</div>}
+    {route.experienceStory && <p className="route-story">体验主线：{route.experienceStory}</p>}<p className="route-reason">{route.recommendationReason}</p>{route.tradeoff && <p className="route-tradeoff">取舍：{route.tradeoff}</p>}{route.poiInsights?.length ? <div className="poi-insights">{route.poiInsights.map((insight) => <p key={insight.poiId}>✓ {route.pois.find((poi) => poi.id === insight.poiId)?.name}：{insight.evidence.join('；')}{insight.risks.length ? `。注意：${insight.risks.join('；')}` : ''}</p>)}</div> : null}{route.risks.length > 0 && <div className="risk-tags">{route.risks.map((risk) => <span key={risk}>! {riskLabel[risk] ?? risk}</span>)}</div>}
     <button className="route-edit" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>查看并编辑 →</button>
   </article>;
 }

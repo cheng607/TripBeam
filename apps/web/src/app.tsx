@@ -26,6 +26,8 @@ function HomePage() {
   const [collecting, setCollecting] = useState(false);
   const [showClarification, setShowClarification] = useState(false);
   const [customPlay, setCustomPlay] = useState('');
+  const [mustHaveInput, setMustHaveInput] = useState('');
+  const [avoidInput, setAvoidInput] = useState('');
   const [notice, setNotice] = useState('');
   const [session, setSession] = useState<{ id: string; token: string }>();
   useEffect(() => { createSession().then((created) => setSession({ id: created.session.id, token: created.token })).catch(() => undefined); }, []);
@@ -38,6 +40,12 @@ function HomePage() {
       availableMinutes: persistedDraft.availableMinutes,
       playPreferences: persistedDraft.playPreferences ?? [],
       travelPreferences: persistedDraft.travelPreferences ?? [],
+      customPreferences: persistedDraft.customPreferences ?? [],
+      mustHave: persistedDraft.mustHave ?? [],
+      niceToHave: persistedDraft.niceToHave ?? [],
+      avoid: persistedDraft.avoid ?? [],
+      timePolicy: persistedDraft.timePolicy ?? 'hard',
+      mobilityPolicy: persistedDraft.mobilityPolicy ?? 'preferred',
     },
   });
   const draft = form.watch();
@@ -74,8 +82,18 @@ function HomePage() {
     const value = customPlay.trim();
     if (!value) return;
     if (value.length > 20) { setNotice('自定义偏好不能超过 20 个字'); return; }
-    if (form.getValues('playPreferences').includes(value)) { setNotice('这个游玩偏好已经添加'); return; }
-    addPlayPreference(value); setCustomPlay('');
+    const current = form.getValues('customPreferences') ?? [];
+    if (current.includes(value)) { setNotice('这个个性偏好已经添加'); return; }
+    if (current.length >= 5) { setNotice('个性偏好最多添加 5 项'); return; }
+    form.setValue('customPreferences', [...current, value], { shouldValidate: true }); setCustomPlay('');
+  }
+
+  function addConstraint(field: 'mustHave' | 'avoid', value: string, clear: () => void) {
+    const item = value.trim(); if (!item) return;
+    const current = form.getValues(field) ?? [];
+    if (current.includes(item)) { setNotice('这项已添加'); return; }
+    if (current.length >= 5) { setNotice('每类最多添加 5 项'); return; }
+    form.setValue(field, [...current, item], { shouldValidate: true }); clear();
   }
 
   function toggleTravelPreference(value: (typeof TRAVEL_PREFERENCE_OPTIONS)[number]) {
@@ -142,9 +160,10 @@ function HomePage() {
               <fieldset className="question-card interest-card"><legend><span className="question-number">03</span>你的偏好</legend>
                 <PreferenceHeading title="游玩偏好" description="选择 1–3 项，也可以添加自己的想法。" />
                 <div className="interest-options">{PLAY_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" className={draft.playPreferences?.includes(option) ? 'is-selected' : ''} onClick={() => addPlayPreference(option)}>{option}</button>)}</div>
-                <div className="custom-preference"><label className="sr-only" htmlFor="customPlay">添加自定义游玩偏好</label><input id="customPlay" value={customPlay} onChange={(event) => setCustomPlay(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addCustomPreference(); } }} placeholder="例如：看日落、逛书店" /><button type="button" onClick={addCustomPreference}>添加</button></div>
-                <div className="custom-tags">{draft.playPreferences?.filter((item) => !PLAY_PREFERENCE_OPTIONS.includes(item as (typeof PLAY_PREFERENCE_OPTIONS)[number])).map((item) => <span className="custom-tag" key={item}>{item}<button type="button" aria-label={`删除 ${item}`} onClick={() => addPlayPreference(item)}>×</button></span>)}</div>
-                <div className="travel-group"><PreferenceHeading title="出行偏好" description="选择你愿意使用的方式，可多选。" /><div id="travel-options" className="travel-options">{TRAVEL_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" className={draft.travelPreferences?.includes(option) ? 'is-selected' : ''} onClick={() => toggleTravelPreference(option)}>{option}</button>)}</div></div>
+                <div className="custom-preference"><label className="sr-only" htmlFor="customPlay">添加个性偏好</label><input id="customPlay" value={customPlay} onChange={(event) => setCustomPlay(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addCustomPreference(); } }} placeholder="例如：看日落、逛书店" /><button type="button" onClick={addCustomPreference}>添加</button></div>
+                <div className="custom-tags">{draft.customPreferences?.map((item) => <span className="custom-tag" key={item}>{item}<button type="button" aria-label={`删除 ${item}`} onClick={() => form.setValue('customPreferences', (draft.customPreferences ?? []).filter((value) => value !== item), { shouldValidate: true })}>×</button></span>)}</div>
+                <div className="travel-group"><PreferenceHeading title="必须满足 / 不想要" description="明确的限制会优先保护；例如轮椅可达、不要连锁店。" /><div className="custom-preference"><input value={mustHaveInput} onChange={(event) => setMustHaveInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addConstraint('mustHave', mustHaveInput, () => setMustHaveInput('')); } }} placeholder="必须满足，例如：独立书店" /><button type="button" onClick={() => addConstraint('mustHave', mustHaveInput, () => setMustHaveInput(''))}>必需 +</button></div><div className="custom-tags">{draft.mustHave?.map((item) => <span className="custom-tag" key={item}>必需：{item}<button type="button" aria-label={`删除 ${item}`} onClick={() => form.setValue('mustHave', (draft.mustHave ?? []).filter((value) => value !== item), { shouldValidate: true })}>×</button></span>)}</div><div className="custom-preference"><input value={avoidInput} onChange={(event) => setAvoidInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addConstraint('avoid', avoidInput, () => setAvoidInput('')); } }} placeholder="不想要，例如：连锁店、辛辣" /><button type="button" onClick={() => addConstraint('avoid', avoidInput, () => setAvoidInput(''))}>排除 +</button></div><div className="custom-tags">{draft.avoid?.map((item) => <span className="custom-tag" key={item}>排除：{item}<button type="button" aria-label={`删除 ${item}`} onClick={() => form.setValue('avoid', (draft.avoid ?? []).filter((value) => value !== item), { shouldValidate: true })}>×</button></span>)}</div></div>
+                <div className="travel-group"><PreferenceHeading title="出行偏好" description="选择你愿意使用的方式，可多选。" /><div id="travel-options" className="travel-options">{TRAVEL_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" className={draft.travelPreferences?.includes(option) ? 'is-selected' : ''} onClick={() => toggleTravelPreference(option)}>{option}</button>)}</div><div className="preference-group-heading"><div><h3>时间弹性</h3><p>明确赶时间时选择严格；否则最多允许浮动 30 分钟并明确提示。</p></div></div><div className="travel-options"><button type="button" className={draft.timePolicy !== 'flexible' ? 'is-selected' : ''} onClick={() => form.setValue('timePolicy', 'hard')}>严格按时</button><button type="button" className={draft.timePolicy === 'flexible' ? 'is-selected' : ''} onClick={() => form.setValue('timePolicy', 'flexible')}>可浮动 30 分钟</button></div></div>
               </fieldset>
             </div>
             <div className="clarify-actions"><p>{preferenceComplete ? '提交后将查询真实地点与路网，再由规则引擎校验路线。' : '请先补充出发点、时长、游玩偏好和出行偏好。'}</p><button className="primary-button" type="submit" disabled={!preferenceComplete || preferenceMutation.isPending}>{preferenceMutation.isPending ? '正在生成路线…' : <>继续规划 <span>→</span></>}</button></div>

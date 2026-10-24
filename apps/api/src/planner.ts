@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Coordinate, Itinerary, Place, Poi, PreferenceDraft, RouteLeg, TripRoute } from '@tripbeam/contracts';
 import { ItinerarySchema, RouteSchema } from '@tripbeam/contracts';
 import { MapProviderError, type MapProvider } from './maps.js';
+import { enrichExperienceRoute, experienceFocus, type ExperienceVariant } from './experience.js';
 
 export const POLICY_VERSION = 'short-trip-v1';
 export class PlannerError extends Error {
@@ -15,11 +16,11 @@ export function haversineMeters(a: Coordinate, b: Coordinate): number {
   return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
 }
 
-const themeDefinitions = [
-  { theme: 'food_first', title: '美食慢逛', priority: '当地美食' },
-  { theme: 'photo_first', title: '光影漫游', priority: '拍照散步' },
-  { theme: 'easy_walk', title: '轻松一站', priority: '' },
-] as const;
+const variants: Array<{ variant: ExperienceVariant; theme: TripRoute['theme']; title: string }> = [
+  { variant: 'deep', theme: 'balanced', title: '深度体验' },
+  { variant: 'wander', theme: 'balanced', title: '街区漫游' },
+  { variant: 'easy', theme: 'easy_walk', title: '轻松留白' },
+];
 const BUFFER_MINUTES = 10;
 
 function rank(poi: Poi, origin: Place, preferences: string[], priority: string): number {
@@ -69,8 +70,11 @@ export async function buildRoute(input: {
   })));
   const totalDurationMinutes = legs.reduce((sum, leg) => sum + leg.durationMinutes, 0) + pois.reduce((sum, poi) => sum + poi.stayMinutes, 0) + BUFFER_MINUTES;
   const totalDistanceMeters = legs.reduce((sum, leg) => sum + leg.distanceMeters, 0);
-  if (totalDurationMinutes > Math.min(preference.availableMinutes, 240)) {
-    const excessMinutes = totalDurationMinutes - Math.min(preference.availableMinutes, 240);
+  const plannedLimit = preference.timePolicy === 'flexible'
+    ? Math.min(240, preference.availableMinutes + 30)
+    : Math.min(preference.availableMinutes, 240);
+  if (totalDurationMinutes > plannedLimit) {
+    const excessMinutes = totalDurationMinutes - plannedLimit;
     throw new PlannerError(`路线超出可用时长 ${excessMinutes} 分钟，请减少停靠点。`, 'CONSTRAINT_VIOLATION', { totalDurationMinutes, totalDistanceMeters, excessMinutes });
   }
   let elapsed = 0;
@@ -80,7 +84,8 @@ export async function buildRoute(input: {
     elapsed += poi.stayMinutes;
     return { poiId: poi.id, arrivalMinuteOffset, departureMinuteOffset: elapsed };
   });
-  const remainingMinutes = preference.availableMinutes - totalDurationMinutes;
+  const exceededPreferredTime = totalDurationMinutes > preference.availableMinutes;
+  const remainingMinutes = Math.max(0, preference.availableMinutes - totalDurationMinutes);
   const route = {
     id: randomUUID(), theme, title, pois, legs, scheduledStops, totalDurationMinutes, totalDistanceMeters, bufferMinutes: remainingMinutes, remainingMinutes,
     walkingIntensity: (mode !== '步行' || totalDistanceMeters < 1800 ? 'low' : totalDistanceMeters < 4000 ? 'medium' : 'high') as TripRoute['walkingIntensity'],
@@ -89,6 +94,7 @@ export async function buildRoute(input: {
       'OPENING_HOURS_UNCERTAIN' as const,
       ...(pois.some((poi) => poi.place.address === '地址待确认') ? ['POI_DATA_PARTIAL' as const] : []),
       ...(remainingMinutes < 20 ? ['ROUTE_TIME_TIGHT' as const] : []),
+      ...(exceededPreferredTime ? ['PREFERENCE_RELAXED' as const] : []),
     ],
   };
   return RouteSchema.parse(route);
@@ -96,23 +102,31 @@ export async function buildRoute(input: {
 
 export async function generateItinerary(preference: PreferenceDraft, map: MapProvider, previousSignatures: string[] = []): Promise<{ itinerary: Itinerary; candidates: Poi[]; city: string }> {
   const { place: origin, city } = await map.resolve(preference.originLabel);
-  const interests = [...new Set([...preference.playPreferences, ...(preference.customPreferences ?? [])])];
+  const interests = [...new Set([...preference.playPreferences, ...(preference.customPreferences ?? []), ...(preference.mustHave ?? []), ...(preference.niceToHave ?? [])])];
   const raw = await map.nearby(origin, interests);
-  const candidates = raw.filter((poi) => haversineMeters(origin.coordinate, poi.place.coordinate) <= 8_000 && poi.stayMinutes >= 10);
+  const avoid = preference.avoid ?? [];
+  const candidates = raw.filter((poi) => {
+    const searchable = `${poi.name} ${poi.category} ${poi.tags.join(' ')}`;
+    return haversineMeters(origin.coordinate, poi.place.coordinate) <= 8_000
+      && poi.stayMinutes >= 10
+      && !avoid.some((item) => searchable.includes(item));
+  });
   if (!candidates.length) throw new PlannerError('附近没有足够的可用地点，请更换出发点或偏好。', 'POI_INSUFFICIENT');
   const routes: TripRoute[] = [];
   const signatures = new Set<string>();
   let providerFailure: MapProviderError | null = null;
-  for (const [themeIndex, definition] of themeDefinitions.entries()) {
-    const sequences = candidateSequences(candidates, origin, interests, definition.priority, preference.availableMinutes);
+  const focus = experienceFocus(preference);
+  for (const [themeIndex, definition] of variants.entries()) {
+    const priority = focus[themeIndex] ?? focus[0] ?? '';
+    const sequences = candidateSequences(candidates, origin, interests, priority, preference.availableMinutes);
     const alternatives = sequences.filter((pois) => !previousSignatures.includes(pois.map((poi) => poi.id).join('|')));
     const ordered = [...alternatives, ...sequences.filter((pois) => previousSignatures.includes(pois.map((poi) => poi.id).join('|')))];
-    for (const pois of ordered.filter((pois) => definition.theme !== 'easy_walk' || pois.length <= 2).slice(0, 6)) {
+    for (const pois of ordered.filter((pois) => definition.variant !== 'easy' || pois.length <= 2).slice(0, 6)) {
       const signature = pois.map((poi) => poi.id).join('|');
-      if (signatures.has(signature) || (definition.theme === 'easy_walk' && pois.length > 2)) continue;
+      if (signatures.has(signature) || (definition.variant === 'easy' && pois.length > 2)) continue;
       try {
         const route = await buildRoute({ origin, city, preference, pois, theme: definition.theme, title: definition.title, map, mode: preference.travelPreferences[themeIndex % preference.travelPreferences.length] });
-        routes.push(route); signatures.add(signature); break;
+        routes.push(enrichExperienceRoute(route, preference, definition.variant)); signatures.add(signature); break;
       } catch (error) {
         if (error instanceof MapProviderError) {
           if (error.code === 'MAP_UNAVAILABLE' || error.code === 'MAP_NOT_CONFIGURED') { providerFailure = error; break; }

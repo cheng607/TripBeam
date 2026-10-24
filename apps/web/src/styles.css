@@ -57,3 +57,4 @@
 .map-fit-button{position:absolute;z-index:1000;bottom:18px;left:12px;min-height:30px;padding:0 9px;border:1px solid rgba(229,229,221,.95);border-radius:7px;background:rgba(255,254,251,.96);color:var(--green);font-size:11px;font-weight:650;box-shadow:0 2px 6px rgba(31,45,39,.12)}
 .map-fit-button:hover{border-color:var(--green-2);background:#fff}
 @media(max-width:640px){.compare-bottom .real-map{min-height:330px}}
+.route-story{margin:14px 0 6px;color:var(--green);font-size:12px;font-weight:700}.route-tradeoff{margin:10px 0 0;padding:8px;border-radius:8px;background:#f4f6f1;color:var(--muted);font-size:12px}.poi-insights{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}.poi-insights p{margin:5px 0;color:var(--muted);font-size:11px;line-height:1.5}

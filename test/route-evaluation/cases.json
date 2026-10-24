@@ -1,0 +1,102 @@
+[
+  {
+    "id": "C01-shanghai-food-bookstore",
+    "input": { "originLabel": "上海人民广场", "startTime": "13:30", "availableMinutes": 180, "playPreferences": ["当地美食", "文化展览"], "travelPreferences": ["步行"], "customPreferences": ["独立书店", "不要连锁店", "少走路"] },
+    "reviewFocus": "能否把独立书店与本地小吃组合成不赶路的下午路线。"
+  },
+  {
+    "id": "C02-chengdu-tea-food",
+    "input": { "originLabel": "成都春熙路", "startTime": "14:00", "availableMinutes": 150, "playPreferences": ["当地美食", "拍照散步"], "travelPreferences": ["步行", "打车"], "customPreferences": ["盖碗茶", "川味小吃", "避开大型商场"] },
+    "reviewFocus": "是否体现成都在地体验，而非泛化的餐厅加公园。"
+  },
+  {
+    "id": "C03-beijing-rainy-culture",
+    "input": { "originLabel": "北京东直门", "startTime": "10:00", "availableMinutes": 210, "playPreferences": ["文化展览"], "travelPreferences": ["公共交通", "步行"], "customPreferences": ["下雨天", "室内为主", "现代艺术"] },
+    "reviewFocus": "是否优先室内文化空间，并避免在雨天安排长距离步行。"
+  },
+  {
+    "id": "C04-hangzhou-lakeside-senior",
+    "input": { "originLabel": "杭州龙翔桥", "startTime": "09:30", "availableMinutes": 180, "playPreferences": ["自然放松", "当地美食"], "travelPreferences": ["打车", "步行"], "customPreferences": ["带老人", "有座位", "西湖景观", "少爬坡"] },
+    "reviewFocus": "是否主动降低步行强度，并兼顾休息点与景观。"
+  },
+  {
+    "id": "C05-guangzhou-night-food",
+    "input": { "originLabel": "广州北京路", "startTime": "18:30", "availableMinutes": 150, "playPreferences": ["当地美食", "夜生活"], "travelPreferences": ["步行", "公共交通"], "customPreferences": ["粤式糖水", "夜市", "不吃辣"] },
+    "reviewFocus": "是否匹配夜间时段和口味约束，且路线有晚间氛围。"
+  },
+  {
+    "id": "C06-shenzhen-design-coffee",
+    "input": { "originLabel": "深圳华侨城", "startTime": "14:00", "availableMinutes": 120, "playPreferences": ["拍照散步", "文化展览"], "travelPreferences": ["步行", "打车"], "customPreferences": ["建筑设计", "精品咖啡", "拍照"] },
+    "reviewFocus": "是否能理解设计、建筑与咖啡的组合偏好。"
+  },
+  {
+    "id": "C07-nanjing-history-vegetarian",
+    "input": { "originLabel": "南京新街口", "startTime": "11:00", "availableMinutes": 180, "playPreferences": ["文化展览", "当地美食"], "travelPreferences": ["公共交通", "步行"], "customPreferences": ["民国历史", "素食午餐", "不要商业街"] },
+    "reviewFocus": "是否同时满足历史主题和素食限制。"
+  },
+  {
+    "id": "C08-wuhan-riverside-family",
+    "input": { "originLabel": "武汉江汉路", "startTime": "15:00", "availableMinutes": 180, "playPreferences": ["自然放松", "当地美食"], "travelPreferences": ["打车", "步行"], "customPreferences": ["亲子", "江景", "儿童可参与", "轻松"] },
+    "reviewFocus": "是否给出适合亲子的低压力江边体验。"
+  },
+  {
+    "id": "C09-xian-quiet-history",
+    "input": { "originLabel": "西安钟楼", "startTime": "09:00", "availableMinutes": 210, "playPreferences": ["文化展览", "当地美食"], "travelPreferences": ["步行", "公共交通"], "customPreferences": ["唐风历史", "安静", "避开网红排队"] },
+    "reviewFocus": "是否能避开高噪量景点，仍保留可靠的历史体验。"
+  },
+  {
+    "id": "C10-suzhou-garden-photo",
+    "input": { "originLabel": "苏州观前街", "startTime": "08:30", "availableMinutes": 180, "playPreferences": ["拍照散步", "文化展览"], "travelPreferences": ["步行", "打车"], "customPreferences": ["园林", "清晨", "古典摄影"] },
+    "reviewFocus": "是否把清晨和园林摄影作为真正的排序依据。"
+  },
+  {
+    "id": "C11-chongqing-short-layover",
+    "input": { "originLabel": "重庆解放碑", "startTime": "16:30", "availableMinutes": 90, "playPreferences": ["当地美食", "拍照散步"], "travelPreferences": ["打车", "步行"], "customPreferences": ["短暂停留", "城市立体感", "少排队"] },
+    "reviewFocus": "90 分钟硬限制下，是否选择少而精且有重庆辨识度的停靠点。"
+  },
+  {
+    "id": "C12-qingdao-seaside-beer",
+    "input": { "originLabel": "青岛五四广场", "startTime": "16:00", "availableMinutes": 180, "playPreferences": ["自然放松", "当地美食"], "travelPreferences": ["步行", "打车"], "customPreferences": ["海边日落", "啤酒文化", "不吃海鲜"] },
+    "reviewFocus": "是否避开海鲜默认假设，并保留海边和啤酒主题。"
+  },
+  {
+    "id": "C13-changsha-music-snacks",
+    "input": { "originLabel": "长沙五一广场", "startTime": "19:00", "availableMinutes": 150, "playPreferences": ["当地美食", "夜生活"], "travelPreferences": ["步行", "打车"], "customPreferences": ["现场音乐", "小吃", "不去酒吧"] },
+    "reviewFocus": "是否区分夜生活与酒吧，并保留音乐场景。"
+  },
+  {
+    "id": "C14-xiamen-slow-walk",
+    "input": { "originLabel": "厦门中山路", "startTime": "10:30", "availableMinutes": 210, "playPreferences": ["拍照散步", "当地美食"], "travelPreferences": ["步行", "公共交通"], "customPreferences": ["闽南老街", "慢节奏", "咖啡", "不赶景点"] },
+    "reviewFocus": "是否避免塞满景点，保留漫游和停留余量。"
+  },
+  {
+    "id": "C15-tianjin-architecture-dessert",
+    "input": { "originLabel": "天津五大道", "startTime": "13:00", "availableMinutes": 150, "playPreferences": ["拍照散步", "当地美食"], "travelPreferences": ["步行", "自行车"], "customPreferences": ["近代建筑", "甜点", "适合约会"] },
+    "reviewFocus": "是否具有约会氛围，且建筑与甜点不是孤立拼接。"
+  },
+  {
+    "id": "C16-fuzhou-tea-tradition",
+    "input": { "originLabel": "福州三坊七巷", "startTime": "14:30", "availableMinutes": 150, "playPreferences": ["文化展览", "当地美食"], "travelPreferences": ["步行", "打车"], "customPreferences": ["茉莉花茶", "传统手作", "安静"] },
+    "reviewFocus": "是否理解茶与传统手作的地方性，而非通用博物馆路线。"
+  },
+  {
+    "id": "C17-kunming-flower-market",
+    "input": { "originLabel": "昆明翠湖公园", "startTime": "09:30", "availableMinutes": 180, "playPreferences": ["自然放松", "拍照散步"], "travelPreferences": ["步行", "打车"], "customPreferences": ["花市", "云南咖啡", "阳光", "不去大型购物中心"] },
+    "reviewFocus": "是否呈现昆明的花和咖啡特色，并满足排除条件。"
+  },
+  {
+    "id": "C18-harbin-winter-indoor",
+    "input": { "originLabel": "哈尔滨中央大街", "startTime": "15:00", "availableMinutes": 120, "playPreferences": ["文化展览", "当地美食"], "travelPreferences": ["打车", "步行"], "customPreferences": ["冬天", "保暖", "俄式文化", "室内停留多"] },
+    "reviewFocus": "是否正确处理冬季和保暖约束，而不是仅安排户外步行。"
+  },
+  {
+    "id": "C19-jinan-spring-teahouse",
+    "input": { "originLabel": "济南泉城广场", "startTime": "10:00", "availableMinutes": 180, "playPreferences": ["自然放松", "当地美食"], "travelPreferences": ["步行", "公共交通"], "customPreferences": ["泉水", "茶馆", "鲁菜", "轻松"] },
+    "reviewFocus": "是否围绕泉水体验组织路线，而不是仅堆叠景点。"
+  },
+  {
+    "id": "C20-zhengzhou-museum-accessible",
+    "input": { "originLabel": "郑州二七广场", "startTime": "13:30", "availableMinutes": 180, "playPreferences": ["文化展览", "当地美食"], "travelPreferences": ["公共交通", "打车"], "customPreferences": ["博物馆", "无障碍", "轮椅同行", "午餐清淡"] },
+    "reviewFocus": "是否识别无障碍和清淡餐食是硬体验约束，而不只是普通标签。"
+  }
+]
