@@ -79,7 +79,9 @@ export const PlaceSchema = z.object({ label: z.string().min(1).max(160), address
 export const PoiSchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(160), category: z.string().min(1).max(40),
   tags: z.array(z.string().min(1).max(30)).max(8), place: PlaceSchema,
-  stayMinutes: z.number().int().min(10).max(180),
+  // A place can be a short connector (viewpoint, historic facade, market stall),
+  // so it must not be excluded merely because it is not a 10-minute destination.
+  stayMinutes: z.number().int().min(1).max(180),
 }).strict();
 export const PoiInsightSchema = z.object({
   poiId: z.string().min(1),

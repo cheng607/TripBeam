@@ -3,9 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GenerateResponseSchema, ShareSnapshotSchema, type Place, type Poi, type RouteLeg } from '@tripbeam/contracts';
+import { GenerateResponseSchema, ShareSnapshotSchema, type Place, type Poi, type PreferenceDraft, type RouteLeg } from '@tripbeam/contracts';
 import { createApp } from '../src/app.js';
-import { haversineMeters } from '../src/planner.js';
+import { buildRoute } from '../src/planner.js';
 import { FilePlanStore } from '../src/store.js';
 import type { MapProvider } from '../src/maps.js';
 import { MapProviderError } from '../src/maps.js';
@@ -23,7 +23,7 @@ const map: MapProvider = {
   nearby: async () => candidates,
   leg: async (from, to, mode): Promise<RouteLeg> => ({ fromId: from.label, toId: to.label, mode, durationMinutes: 6, distanceMeters: 450, geometry: [from.coordinate, to.coordinate] }),
 };
-    const preference = { originLabel: '春熙路', startTime: '14:00', availableMinutes: 120, playPreferences: ['当地美食', '拍照散步'], travelPreferences: ['步行'], mustHave: ['当地美食'], avoid: ['不存在的地点'] };
+const preference: PreferenceDraft = { originLabel: '春熙路', startTime: '14:00', availableMinutes: 120, playPreferences: ['当地美食', '拍照散步'], travelPreferences: ['步行'], mustHave: ['当地美食'], avoid: ['不存在的地点'] };
 const folders: string[] = [];
 afterEach(async () => { for (const path of folders.splice(0)) await rm(path, { recursive: true, force: true }); });
 
@@ -40,6 +40,12 @@ describe('deterministic planning API', () => {
     expect(trip.routes.every((route) => route.constraintStatus === 'valid' && route.totalDurationMinutes <= 120)).toBe(true);
     expect(trip.routes.every((route) => route.experienceStory && route.matchedPreferences?.includes('当地美食') && route.poiInsights?.length === route.pois.length)).toBe(true);
     expect(new Set(trip.routes.map((route) => route.pois.map((poi) => poi.id).join('|'))).size).toBe(trip.routes.length);
+    expect(new Set(trip.routes.map((route) => route.title.split(' · ').at(-1))).size).toBe(trip.routes.length);
+    for (const [index, route] of trip.routes.entries()) for (const other of trip.routes.slice(index + 1)) {
+      const ids = new Set(route.pois.map((poi) => poi.id));
+      const shared = other.pois.filter((poi) => ids.has(poi.id)).length;
+      expect(shared / Math.min(route.pois.length, other.pois.length)).toBeLessThanOrEqual(0.5);
+    }
 
     const route = trip.routes.find((item) => item.pois.length > 1)!;
     const saved = await app.inject({ method: 'POST', url: `/v1/itineraries/${trip.id}/save`, payload: { baseVersion: trip.version } });
@@ -76,8 +82,11 @@ describe('deterministic planning API', () => {
     await app.close();
   });
 
-  it('enforces the 8km spatial rule and rejects time overflow', async () => {
-    expect(haversineMeters(origin.coordinate, { lat: 30.8, lng: 104.081 })).toBeGreaterThan(8_000);
+  it('uses route time rather than a fixed origin radius, and still rejects time overflow', async () => {
+    const farButReachable: Poi = { ...candidates[0]!, id: 'far', place: { ...candidates[0]!.place, coordinate: { lat: 30.8, lng: 104.081 } }, stayMinutes: 5 };
+    const route = await buildRoute({ origin, city: '成都', preference, pois: [farButReachable], theme: 'balanced', title: '远距离但可达', map });
+    expect(route.constraintStatus).toBe('valid');
+    expect(route.pois[0]!.stayMinutes).toBe(5);
     const longMap: MapProvider = { ...map, leg: async (from, to, mode) => ({ fromId: from.label, toId: to.label, mode, durationMinutes: 120, distanceMeters: 400, geometry: [from.coordinate, to.coordinate] }) };
     const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);
     const app = createApp({ map: longMap, store: new FilePlanStore(join(folder, 'plans.json')) });

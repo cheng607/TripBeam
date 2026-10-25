@@ -9,7 +9,7 @@ export class MapProviderError extends Error {
 
 export interface MapProvider {
   resolve(text: string): Promise<{ place: Place; city: string }>;
-  nearby(origin: Place, preferences: string[]): Promise<Poi[]>;
+  nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]>;
   leg(from: Place, to: Place, mode: RouteLeg['mode'], city: string): Promise<RouteLeg>;
 }
 
@@ -138,11 +138,12 @@ export class AMapProvider implements MapProvider {
     return { place: { label: string(poi.name) || text, address: string(poi.address) || text, coordinate: gcjToWgs(coordinate) }, city: string(cityValue) || '中国' };
   }
 
-  async nearby(origin: Place, preferences: string[]): Promise<Poi[]> {
+  async nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]> {
     const queries = preferences.slice(0, 8).map((preference) => ({ preference, ...themeQueries[preference] ?? { query: preference, category: '其他', stay: 35 } }));
     if (!queries.some((item) => item.category === '景点')) queries.push({ preference: '拍照散步', ...themeQueries.拍照散步! });
+    const radiusMeters = Math.max(1_000, Math.min(50_000, Math.round(options?.radiusMeters ?? 12_000)));
     const responses = await Promise.all(queries.map(async (item) => ({ item, data: await this.get('/v3/place/around', {
-      location: queryCoordinate(origin.coordinate), keywords: item.query, radius: '8000', offset: '20', sortrule: 'weight', extensions: 'base',
+      location: queryCoordinate(origin.coordinate), keywords: item.query, radius: String(radiusMeters), offset: '20', sortrule: 'weight', extensions: 'base',
     }) })));
     const found = new Map<string, Poi>();
     for (const { item, data } of responses) for (const raw of list(data.pois)) {
