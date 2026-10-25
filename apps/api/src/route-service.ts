@@ -15,6 +15,8 @@ export function selectPois(plan: StoredPlan, routeId: string, command: EditComma
   const byId = new Map([...plan.candidates, ...original].map((p) => [p.id, p]));
   const ids = original.map((p) => p.id);
   let next = [...ids];
+  const stayUpdate = command.operation === 'stay' ? { poiId: command.poiId, stayMinutes: command.stayMinutes } : undefined;
+  if (stayUpdate && !ids.includes(stayUpdate.poiId)) throw new WorkflowError('只能调整当前路线中的停留时间。');
   if (command.operation === 'remove') { if (!ids.includes(command.poiId)) throw new WorkflowError('删除地点不在当前路线中。'); next = ids.filter((id) => id !== command.poiId); }
   if (command.operation === 'add') next.push(command.poiId);
   if (command.operation === 'replace') { if (!ids.includes(command.poiId)) throw new WorkflowError('替换地点不在当前路线中。'); next = ids.map((id) => id === command.poiId ? command.replacementPoiId : id); }
@@ -23,7 +25,10 @@ export function selectPois(plan: StoredPlan, routeId: string, command: EditComma
     next = command.poiIds;
   }
   if (!next.length || next.length > 8 || new Set(next).size !== next.length || next.some((id) => !byId.has(id))) throw new WorkflowError('编辑后需有 1–8 个不重复的已知地点。');
-  return next.map((id) => byId.get(id)!);
+  return next.map((id) => {
+    const poi = byId.get(id)!;
+    return stayUpdate?.poiId === id ? { ...poi, stayMinutes: stayUpdate.stayMinutes } : poi;
+  });
 }
 
 export async function editRoute(store: PlanStore, map: MapProvider, id: string, routeId: string, command: EditCommand) {

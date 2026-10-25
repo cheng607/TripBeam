@@ -61,7 +61,7 @@ function HomePage() {
   }, [collecting]);
   useEffect(() => {
     const value = activeField ? draft[activeField] : undefined;
-    setFieldValue(typeof value === 'string' ? value : '');
+    setFieldValue(typeof value === 'string' || typeof value === 'number' ? String(value) : '');
   }, [activeField]);
 
   function applyTurn(result: TurnResult) {
@@ -90,7 +90,7 @@ function HomePage() {
   function editField(field: keyof PreferenceExtraction) {
     if (busy || !(field in questions)) return;
     const key = field as RequiredField; setEditingField(key);
-    const value = draft[key]; setFieldValue(typeof value === 'string' ? value : '');
+    const value = draft[key]; setFieldValue(typeof value === 'string' || typeof value === 'number' ? String(value) : '');
     requestAnimationFrame(() => document.getElementById('clarify-title')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
   const toggle = (field: 'playPreferences' | 'travelPreferences', value: string) => {
@@ -111,7 +111,7 @@ function HomePage() {
         {session?.itineraryId && <div className="resume-trip"><span>上次的路线还在，继续编辑或聊聊新的想法。</span><Link to={`/compare/${session.itineraryId}`}>继续查看方案 ↗</Link></div>}
         <div className="chat-log" role="log" aria-label="规划对话" aria-live="polite">{messages.map((message, index) => message.role === 'assistant' ? <ChatMessage key={index}>{message.text}</ChatMessage> : <div className="user-message" key={index}><p>{message.text}</p></div>)}</div>
         {collecting && <div className="planning-status" role="status"><span className="loading-orbit" /><div><strong>正在理解需求与检查规划条件{elapsed > 0 ? ` · ${elapsed} 秒` : ''}</strong><p>{elapsed >= 15 ? '地点和路网查询需要一些时间，请保持页面打开。' : '信息不足时会继续补问，条件完整后会查找地点并编排行程。'}</p></div></div>}
-        {activeField && <ClarificationCard field={activeField} selectedPlay={draft.playPreferences ?? []} selectedTravel={draft.travelPreferences ?? []} fieldValue={fieldValue} setFieldValue={setFieldValue} onToggle={toggle} onAnswer={answerField} disabled={busy} />}
+        {activeField && <ClarificationCard field={activeField} selectedPlay={draft.playPreferences ?? []} selectedTravel={draft.travelPreferences ?? []} selectedCustom={draft.customPreferences ?? []} onCustomChange={(customPreferences) => setDraft((state) => ({ ...state, customPreferences }))} fieldValue={fieldValue} setFieldValue={setFieldValue} onToggle={toggle} onAnswer={answerField} disabled={busy} />}
         {notice && <div className="inline-alert home-notice" role="status"><p>{notice}</p>{failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn(failedTurn, true)}>重试这次请求</button>}</div>}
         {session && ['no_route', 'error'].includes(session.phase) && !failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn({ turnId: crypto.randomUUID(), text: '按已确认的条件重新规划', action: 'regenerate', preferencePatch: draft })}>按这些条件重新尝试</button>}
         <form className="composer" onSubmit={(event) => { event.preventDefault(); sendText(input); }}>
@@ -126,13 +126,17 @@ function HomePage() {
   </div>;
 }
 
-function ClarificationCard({ field, selectedPlay, selectedTravel, fieldValue, setFieldValue, onToggle, onAnswer, disabled }: { field: RequiredField; selectedPlay: string[]; selectedTravel: TravelPreference[]; fieldValue: string; setFieldValue: (value: string) => void; onToggle: (field: 'playPreferences' | 'travelPreferences', value: string) => void; onAnswer: (patch: PreferenceExtraction, displayText: string) => void; disabled: boolean }) {
+function ClarificationCard({ field, selectedPlay, selectedTravel, selectedCustom, onCustomChange, fieldValue, setFieldValue, onToggle, onAnswer, disabled }: { field: RequiredField; selectedPlay: string[]; selectedTravel: TravelPreference[]; selectedCustom: string[]; onCustomChange: (value: string[]) => void; fieldValue: string; setFieldValue: (value: string) => void; onToggle: (field: 'playPreferences' | 'travelPreferences', value: string) => void; onAnswer: (patch: PreferenceExtraction, displayText: string) => void; disabled: boolean }) {
+  const [customDraft, setCustomDraft] = useState(selectedCustom.join('，'));
+  useEffect(() => setCustomDraft(selectedCustom.join('，')), [field]);
   const question = questions[field]; const submitText = field === 'originLabel' ? fieldValue.trim() : field === 'startTime' ? fieldValue : '';
   const submit = (event: React.FormEvent) => { event.preventDefault(); if (submitText) onAnswer({ [field]: submitText }, `${field === 'originLabel' ? '从这里出发' : '出发时间'}：${submitText}`); };
+  const duration = Number(fieldValue);
+  const parseCustom = (value: string) => [...new Set(value.split(/[，,、]/u).map((item) => item.trim()).filter(Boolean))].slice(0, 5).map((item) => item.slice(0, 30));
   return <section className="clarify step-question" aria-labelledby="clarify-title"><div className="clarify-heading"><span className="avatar">T</span><div><p className="overline">确认出行条件</p><h2 id="clarify-title">{question.title}</h2><p>{question.description}</p></div></div>
     {(field === 'originLabel' || field === 'startTime') && <form className="step-answer" onSubmit={submit}><input aria-label={question.title} disabled={disabled} required maxLength={120} type={field === 'startTime' ? 'time' : 'text'} value={fieldValue} onChange={(event) => setFieldValue(event.target.value)} placeholder={field === 'originLabel' ? '例如：武汉光谷广场' : undefined} onKeyDown={(event) => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }} /><button className="primary-button" type="submit" disabled={disabled || !submitText}>确认{field === 'originLabel' ? '出发点' : '时间'}</button></form>}
-    {field === 'availableMinutes' && <div className="duration-options step-options">{DURATIONS.map((duration) => <button key={duration} type="button" disabled={disabled} onClick={() => onAnswer({ availableMinutes: duration }, `可用时间：${duration < 60 ? `${duration} 分钟` : `${duration / 60} 小时`}`)}>{duration < 60 ? `${duration} 分钟` : `${duration / 60} 小时`}</button>)}</div>}
-    {field === 'playPreferences' && <><div className="interest-options step-options">{[...new Set([...PLAY_PREFERENCE_OPTIONS, ...selectedPlay])].map((option) => <button key={option} type="button" aria-pressed={selectedPlay.includes(option)} className={selectedPlay.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('playPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedPlay.length} onClick={() => onAnswer({ playPreferences: selectedPlay }, `想体验：${selectedPlay.join('、')}`)}>确认游玩偏好</button></>}
+    {field === 'availableMinutes' && <><div className="duration-options step-options">{DURATIONS.map((option) => <button key={option} type="button" aria-pressed={duration === option} className={duration === option ? 'is-selected' : ''} disabled={disabled} onClick={() => setFieldValue(String(option))}>{option < 60 ? `${option} 分钟` : `${option / 60} 小时`}</button>)}</div><form className="custom-duration-form" onSubmit={(event) => { event.preventDefault(); if (Number.isInteger(duration) && duration >= 30 && duration <= 240) onAnswer({ availableMinutes: duration }, `可用时间：${duration < 60 ? `${duration} 分钟` : `${Math.floor(duration / 60)} 小时${duration % 60 ? ` ${duration % 60} 分钟` : ''}`}`); }}><label>也可以自定义时长 <span>30–240 分钟</span></label><div><input aria-label="自定义可用时长（分钟）" type="number" min={30} max={240} step={1} required value={fieldValue} onChange={(event) => setFieldValue(event.target.value)} disabled={disabled} /><button className="primary-button" type="submit" disabled={disabled || !Number.isInteger(duration) || duration < 30 || duration > 240}>确认时长</button></div></form></>}
+    {field === 'playPreferences' && <><div className="interest-options step-options">{[...new Set([...PLAY_PREFERENCE_OPTIONS, ...selectedPlay])].map((option) => <button key={option} type="button" aria-pressed={selectedPlay.includes(option)} className={selectedPlay.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('playPreferences', option)}>{option}</button>)}</div><label className="custom-preference-field">自定义想体验的内容 <span>可用逗号分隔，最多 5 项</span><input aria-label="自定义游玩偏好" maxLength={160} value={customDraft} disabled={disabled} placeholder="例如：独立书店、江边日落、安静咖啡馆" onChange={(event) => { setCustomDraft(event.target.value); onCustomChange(parseCustom(event.target.value)); }} /></label><button className="primary-button step-confirm" type="button" disabled={disabled || (!selectedPlay.length && !parseCustom(customDraft).length)} onClick={() => { const customPreferences = parseCustom(customDraft); onCustomChange(customPreferences); onAnswer({ playPreferences: selectedPlay, customPreferences }, `想体验：${[...selectedPlay, ...customPreferences].join('、')}`); }}>确认游玩偏好</button></>}
     {field === 'travelPreferences' && <><div className="travel-options step-options">{TRAVEL_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" aria-pressed={selectedTravel.includes(option)} className={selectedTravel.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('travelPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedTravel.length} onClick={() => onAnswer({ travelPreferences: selectedTravel }, `出行方式：${selectedTravel.join('、')}`)}>确认出行方式</button></>}</section>;
 }
 

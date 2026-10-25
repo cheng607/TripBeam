@@ -547,6 +547,14 @@ components:
             baseVersion: { type: integer, minimum: 1 }
             poiId: { type: string, minLength: 1 }
             replacementPoiId: { type: string, minLength: 1 }
+        - type: object
+          additionalProperties: false
+          required: [operation, baseVersion, poiId, stayMinutes]
+          properties:
+            operation: { type: string, const: stay }
+            baseVersion: { type: integer, minimum: 1 }
+            poiId: { type: string, minLength: 1 }
+            stayMinutes: { type: integer, minimum: 1, maximum: 180 }
       discriminator:
         propertyName: operation
     ShareSnapshot:

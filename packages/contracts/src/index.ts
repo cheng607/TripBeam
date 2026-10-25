@@ -135,6 +135,7 @@ export const EditCommandSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('reorder'), baseVersion: z.number().int().min(1), poiIds: z.array(z.string().min(1)).min(1).max(8) }).strict(),
   z.object({ operation: z.literal('add'), baseVersion: z.number().int().min(1), poiId: z.string().min(1) }).strict(),
   z.object({ operation: z.literal('replace'), baseVersion: z.number().int().min(1), poiId: z.string().min(1), replacementPoiId: z.string().min(1) }).strict(),
+  z.object({ operation: z.literal('stay'), baseVersion: z.number().int().min(1), poiId: z.string().min(1), stayMinutes: z.number().int().min(1).max(180) }).strict(),
 ]);
 export const ShareSnapshotSchema = z.object({ token: z.string().min(24).max(128), itineraryId: z.string().uuid(), version: z.number().int().min(1), route: RouteSchema, origin: PlaceSchema, preference: PreferenceDraftSchema, createdAt: z.string().datetime() }).strict();
 
