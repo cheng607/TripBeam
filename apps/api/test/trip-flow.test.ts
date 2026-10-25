@@ -96,6 +96,21 @@ describe('deterministic planning API', () => {
     await app.close();
   });
 
+  it('rejects a plan when it cannot offer two concrete, distinct routes', async () => {
+    const limitedCandidates: Poi[] = [
+      { ...candidates[0]!, id: 'venue-only', placeKind: 'venue' },
+      { ...candidates[1]!, id: 'district-only', name: '城市步行街', placeKind: 'area' },
+    ];
+    const limitedMap: MapProvider = { ...map, nearby: async () => limitedCandidates };
+    const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);
+    const app = createApp({ map: limitedMap, store: new FilePlanStore(join(folder, 'plans.json')) });
+    const response = await app.inject({ method: 'POST', url: '/v1/itineraries/generate', payload: preference });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe('POI_INSUFFICIENT');
+    expect(response.json().message).toContain('具体地点');
+    await app.close();
+  });
+
   it('reports map outages explicitly instead of estimating a path', async () => {
     const failedMap: MapProvider = { ...map, leg: async () => { throw new MapProviderError('路网暂不可用。', 'MAP_UNAVAILABLE'); } };
     const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);

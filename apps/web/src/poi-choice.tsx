@@ -18,7 +18,7 @@ export function PoiChoice({ pois, selectedId, onSelect, loading = false, error =
 
   return <div className="poi-choice">
     <button type="button" className="poi-choice-trigger" aria-label={selected ? `选择附近候选地点，当前为${selected.name}` : '选择附近候选地点'} aria-expanded={open} aria-controls="poi-choice-list" onClick={() => setOpen((value) => !value)}>
-      <span className={selected ? '' : 'poi-choice-placeholder'}>{selected?.name ?? '搜索并选择地点'}</span><span aria-hidden="true">{open ? '⌃' : '⌄'}</span>
+      <span className={selected ? '' : 'poi-choice-placeholder'}>{selected?.name ?? '搜索并选择地点'}</span><span className="poi-choice-chevron" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><path d={open ? 'm4 10 4-4 4 4' : 'm4 6 4 4 4-4'} /></svg></span>
     </button>
     {open && <div className="poi-choice-panel">
       <input aria-label="搜索附近候选地点" autoFocus value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => {

@@ -53,6 +53,8 @@
 .map-legend button:hover,.map-legend button.active{border-color:var(--green-2);background:#fffefb;color:var(--ink);font-weight:650}
 @media(max-width:640px){.real-map .map-legend button{font-size:10px}}
 .compare-bottom .trip-marker span{width:26px;height:26px;border-width:2px;font-size:11px}
+.editor-map .trip-marker.is-selected span{width:42px;height:42px;border-width:4px;background:var(--marker-color);color:#fffefb;box-shadow:0 0 0 5px rgba(31,45,39,.16),0 6px 14px rgba(31,45,39,.28);transform:translate(-5px,-5px);transition:transform .16s ease,box-shadow .16s ease}
+.poi-choice-chevron{display:grid;flex:none;width:24px;height:24px;place-items:center;border:1px solid #d8e4dc;border-radius:50%;background:#f3f8f4;color:var(--green);transition:transform .16s ease,background .16s ease}.poi-choice-trigger[aria-expanded="true"] .poi-choice-chevron{background:var(--pale);transform:rotate(180deg)}.poi-choice-chevron svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.8}
 .compare-bottom .real-map{min-height:380px}
 .map-fit-button{position:absolute;z-index:1000;bottom:18px;left:12px;min-height:30px;padding:0 9px;border:1px solid rgba(229,229,221,.95);border-radius:7px;background:rgba(255,254,251,.96);color:var(--green);font-size:11px;font-weight:650;box-shadow:0 2px 6px rgba(31,45,39,.12)}
 .map-fit-button:hover{border-color:var(--green-2);background:#fff}

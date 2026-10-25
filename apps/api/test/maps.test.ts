@@ -25,6 +25,7 @@ describe('AMap adapter', () => {
     expect(city).toBe('成都');
     const pois = await map.nearby(place, ['当地美食']);
     expect(pois).toHaveLength(2);
+    expect(pois.map((poi) => poi.placeKind)).toEqual(['venue', 'landmark']);
     const leg = await map.leg(place, pois[0]!.place, '步行', city);
     expect(leg.durationMinutes).toBe(6);
     expect(leg.distanceMeters).toBe(480);

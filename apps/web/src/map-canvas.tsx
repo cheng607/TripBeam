@@ -20,10 +20,11 @@ function wgsToGcj({ lat, lng }: { lat: number; lng: number }) {
 }
 const displayCoordinate = (coordinate: { lat: number; lng: number }) => coordinateSystem === 'gcj02' ? wgsToGcj(coordinate) : coordinate;
 
-export function MapCanvas({ origin, routes, activeRouteId, onSelectStop, onSelectRoute }: { origin: Place; routes: TripRoute[]; activeRouteId: string; onSelectStop?: (index: number) => void; onSelectRoute?: (id: string) => void }) {
+export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute }: { origin: Place; routes: TripRoute[]; activeRouteId: string; activeStopIndex?: number; onSelectStop?: (index: number) => void; onSelectRoute?: (id: string) => void }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const allRouteBounds = useRef<L.LatLngBounds | null>(null);
+  const lastFittedShape = useRef('');
   const fitMaxZoom = onSelectRoute ? 17 : 15;
   const fitPadding = onSelectRoute ? .08 : .17;
   const [tileFailed, setTileFailed] = useState(false);
@@ -70,7 +71,8 @@ export function MapCanvas({ origin, routes, activeRouteId, onSelectStop, onSelec
         bounds.extend(point);
         if (active) {
           const markerSize = onSelectRoute ? 26 : 32;
-          L.marker(point, { icon: L.divIcon({ className: 'trip-marker', html: `<span style="--marker-color:${color}">${index + 1}</span>`, iconSize: [markerSize, markerSize], iconAnchor: [markerSize / 2, markerSize / 2] }) })
+          const selected = index === activeStopIndex;
+          L.marker(point, { zIndexOffset: selected ? 1_000 : 0, icon: L.divIcon({ className: `trip-marker${selected ? ' is-selected' : ''}`, html: `<span style="--marker-color:${color}">${index + 1}</span>`, iconSize: [markerSize, markerSize], iconAnchor: [markerSize / 2, markerSize / 2] }) })
             .bindTooltip(poi.name).on('click', () => onSelectStop?.(index)).addTo(group);
         } else {
           const marker = L.circleMarker(point, { radius: 5, color, weight: 2, fillColor: '#fffefb', fillOpacity: .95, opacity: .85 }).bindTooltip(`${route.title} · ${poi.name}`).addTo(group);
@@ -79,9 +81,13 @@ export function MapCanvas({ origin, routes, activeRouteId, onSelectStop, onSelec
       });
     });
     allRouteBounds.current = bounds.isValid() ? bounds : null;
-    if (allRouteBounds.current) instance.fitBounds(allRouteBounds.current.pad(fitPadding), { maxZoom: fitMaxZoom });
+    const shape = `${origin.coordinate.lat},${origin.coordinate.lng}:${routes.map((route) => `${route.id}:${route.pois.map((poi) => poi.id).join(',')}`).join('|')}`;
+    if (allRouteBounds.current && lastFittedShape.current !== shape) {
+      instance.fitBounds(allRouteBounds.current.pad(fitPadding), { maxZoom: fitMaxZoom });
+      lastFittedShape.current = shape;
+    }
     return () => { group.remove(); };
-  }, [origin, routes, activeRouteId, onSelectStop, onSelectRoute, fitMaxZoom, fitPadding]);
+  }, [origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute, fitMaxZoom, fitPadding]);
 
   const hasGeometry = routes.some((route) => route.legs.some((leg) => leg.geometry.length >= 2));
   return <div className="real-map" aria-label="真实路网地图"><div ref={element} className="leaflet-host" />{(!hasGeometry || tileFailed) && <div className="map-unavailable">{tileFailed ? '底图暂不可用；路线与地点清单仍可使用。' : '线路几何暂不可用，请查看地点清单。'}</div>}<div className="map-legend" aria-label="地图线路图例">{routes.map((route, index) => onSelectRoute ? <button type="button" className={route.id === activeRouteId ? 'active' : ''} aria-pressed={route.id === activeRouteId} key={route.id} onClick={() => onSelectRoute(route.id)}><i style={{ background: routeColor(index) }} />方案 {String.fromCharCode(65 + index)} · {route.title}</button> : <span className={route.id === activeRouteId ? 'active' : ''} key={route.id}><i style={{ background: routeColor(index) }} />方案 {String.fromCharCode(65 + index)} · {route.title}</span>)}</div>{routes.length > 1 && <button className="map-fit-button" type="button" onClick={() => { if (allRouteBounds.current) map.current?.fitBounds(allRouteBounds.current.pad(fitPadding), { maxZoom: fitMaxZoom }); }}>查看全部线路</button>}</div>;

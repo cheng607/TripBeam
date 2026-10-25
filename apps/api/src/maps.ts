@@ -26,6 +26,7 @@ export class DemoMapProvider implements MapProvider {
       id: `demo-${index + 1}`, name, category: index % 2 ? '景点' : '餐饮', tags: [tags[index % tags.length]!],
       place: { label: name, address: '演示地址（非实时数据）', coordinate: { lat: origin.coordinate.lat + 0.004 * Math.cos(index), lng: origin.coordinate.lng + 0.004 * Math.sin(index) } },
       stayMinutes: 25 + (index % 3) * 10,
+      placeKind: name.includes('步行区') ? 'area' : name.includes('公园') || name.includes('博物馆') || name.includes('观景') ? 'landmark' : 'venue',
     }));
   }
   async leg(from: Place, to: Place, mode: RouteLeg['mode']) {
@@ -45,6 +46,13 @@ const themeQueries: Record<string, { query: string; category: string; stay: numb
   逛街购物: { query: '商场', category: '购物', stay: 45 },
   夜生活: { query: '夜市', category: '夜生活', stay: 45 },
 };
+
+function classifyPlaceKind(name: string, category: string): NonNullable<Poi['placeKind']> {
+  if (['餐饮', '购物', '夜生活'].includes(category)) return 'venue';
+  if (/(步行街|商业街|商圈|街区|园区|校区|市场|广场)$/u.test(name)) return 'area';
+  if (/(公园|博物馆|美术馆|图书馆|展览馆|寺|教堂|塔|观景台|景区|大学)$/u.test(name)) return 'landmark';
+  return 'venue';
+}
 
 type JsonObject = Record<string, unknown>;
 const record = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
@@ -151,9 +159,10 @@ export class AMapProvider implements MapProvider {
       if (!coordinate || !id || !string(poi.name)) continue;
       const existing = found.get(id);
       if (existing) { if (!existing.tags.includes(item.preference)) existing.tags.push(item.preference); continue; }
-      found.set(id, { id, name: string(poi.name), category: item.category, tags: [item.preference],
+      const name = string(poi.name);
+      found.set(id, { id, name, category: item.category, tags: [item.preference],
         place: { label: string(poi.name), address: string(poi.address) || string(poi.pname) || '地址待确认', coordinate: gcjToWgs(coordinate) },
-        stayMinutes: item.stay });
+        stayMinutes: item.stay, placeKind: classifyPlaceKind(name, item.category) });
     }
     return [...found.values()];
   }

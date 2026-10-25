@@ -39,7 +39,8 @@ function rank(poi: Poi, origin: Place, preferences: string[], priority: string, 
   const preferenceScore = poi.tags.filter((tag) => preferences.includes(tag)).length * 28;
   const themeScore = priority && poi.tags.includes(priority) ? 34 * strategy.focusWeight : 0;
   const originCost = haversineMeters(origin.coordinate, poi.place.coordinate) / 160 * strategy.legPenalty;
-  return preferenceScore * strategy.focusWeight + themeScore + poi.stayMinutes * strategy.stayWeight - originCost;
+  const areaPenalty = poi.placeKind === 'area' ? 60 : 0;
+  return preferenceScore * strategy.focusWeight + themeScore + poi.stayMinutes * strategy.stayWeight - originCost - areaPenalty;
 }
 
 function candidateSequences(candidates: Poi[], origin: Place, preferences: string[], priority: string, availableMinutes: number, strategy: RouteStrategy): Poi[][] {
@@ -51,6 +52,9 @@ function candidateSequences(candidates: Poi[], origin: Place, preferences: strin
     const next: typeof beam = [];
     for (const state of beam) for (const poi of ranked) {
       if (state.pois.some((item) => item.id === poi.id)) continue;
+      // A neighbourhood-scale POI may provide route context, but must follow a
+      // concrete venue/landmark and never be the only reason for a route.
+      if (poi.placeKind === 'area' && (state.pois.length === 0 || state.pois.some((item) => item.placeKind === 'area'))) continue;
       const previous = state.pois.at(-1)?.place ?? origin;
       const distance = haversineMeters(previous.coordinate, poi.place.coordinate);
       const estimate = state.estimatedMinutes + poi.stayMinutes + Math.ceil(distance / 70) + BUFFER_MINUTES;
@@ -139,7 +143,8 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
     const searchable = `${poi.name} ${poi.category} ${poi.tags.join(' ')}`;
     return poi.stayMinutes >= 1 && !avoid.some((item) => searchable.includes(item));
   });
-  if (!candidates.length) throw new PlannerError('附近没有足够的可用地点，请更换出发点或偏好。', 'POI_INSUFFICIENT');
+  const concreteCandidates = candidates.filter((poi) => poi.placeKind !== 'area');
+  if (concreteCandidates.length < 2) throw new PlannerError('附近缺少至少两个具体地点，无法生成可比较的路线；请调整出发点或偏好。', 'POI_INSUFFICIENT');
   const routes: TripRoute[] = [];
   const signatures = new Set<string>();
   let providerFailure: MapProviderError | null = null;
@@ -164,10 +169,9 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
     if (providerFailure) break;
   }
   if (providerFailure) throw providerFailure;
-  if (!routes.length) throw new PlannerError('暂时无法形成满足时间与路网约束的路线，请调整条件。', 'ROUTE_UNAVAILABLE');
-  if (routes.length < 2) routes[0]!.risks.push('ROUTE_COUNT_LIMITED');
+  if (routes.length < 2) throw new PlannerError('暂时无法生成两条差异足够明显且满足时间、路网约束的路线；请调整出发点、时间或偏好。', 'ROUTE_UNAVAILABLE');
   const itinerary = ItinerarySchema.parse({
-    id: randomUUID(), version: 1, preference, origin, routes, status: routes.length >= 2 ? 'complete' : 'degraded',
+    id: randomUUID(), version: 1, preference, origin, routes, status: 'complete',
     generatedAt: new Date().toISOString(), policyVersion: POLICY_VERSION, savedVersion: null,
   });
   return { itinerary, candidates, city };

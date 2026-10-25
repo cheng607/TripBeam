@@ -166,7 +166,7 @@ export function createApp(options: AppOptions = {}) {
     const route = plan?.itinerary.routes.find((item) => item.id === parsed.data.routeId);
     if (!plan || !route) return reply.code(404).send(apiError(request.id, 'NOT_FOUND', '路线不存在。'));
     const used = new Set(route.pois.map((poi) => poi.id));
-    return reply.send({ requestId: request.id, alternatives: plan.candidates.filter((poi) => !used.has(poi.id)).slice(0, 20) });
+    return reply.send({ requestId: request.id, alternatives: plan.candidates.filter((poi) => !used.has(poi.id) && poi.placeKind !== 'area').slice(0, 20) });
   });
   app.post('/v1/itineraries/:id/routes/:routeId/edits', async (request, reply) => {
     const parsed = routeParams.safeParse(request.params); const command = EditCommandSchema.safeParse(request.body);
