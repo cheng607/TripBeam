@@ -38,9 +38,39 @@ paths:
       responses:
         '201':
           description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requestId, token, session]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  token: { type: string, minLength: 20 }
+                  session: { $ref: '#/components/schemas/Session' }
+  /v1/sessions/{id}:
+    get:
+      summary: Restore an authenticated planning session
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+        - $ref: '#/components/parameters/SessionToken'
+      responses:
+        '200':
+          description: Persisted session and conversation history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { description: Invalid or missing session token }
   /v1/sessions/{id}/turns:
     post:
       summary: Process one multi-turn planning or editing request
+      description: >-
+        Reusing the same turnId and payload returns the original result. Changed
+        content with the same turnId returns 409. Requests for one session are
+        serialized within an API process; multi-instance deployments require a
+        shared transaction or lock strategy. Planning failures preserve preferences
+        and return a TurnResult with retry and adjust_preferences actions.
       parameters:
         - name: id
           in: path
@@ -56,17 +86,25 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [turnId, text]
               properties:
                 turnId: { type: string, format: uuid }
                 text: { type: string, maxLength: 1000 }
                 action: { type: string, enum: [message, confirm_preferences, regenerate, explain_route] }
+                preferencePatch: { $ref: '#/components/schemas/PreferenceExtraction' }
                 itineraryId: { type: string, format: uuid }
                 routeId: { type: string, format: uuid }
                 baseVersion: { type: integer, minimum: 1 }
       responses:
-        '200': { description: Turn result }
+        '200':
+          description: Turn result; explain_route reads an existing validated route without generating one
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TurnResult' }
         '401': { description: Invalid session token }
+        '403': { description: Referenced itinerary belongs to a different session }
+        '409': { $ref: '#/components/responses/ValidationError' }
   /v1/preferences/validate:
     post:
       summary: Validate a complete structured preference before planning
@@ -221,6 +259,31 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/ValidationError' }
         '409': { $ref: '#/components/responses/ValidationError' }
+  /v1/itineraries/{id}/routes/{routeId}/restore:
+    post:
+      operationId: restoreValidRoute
+      description: >-
+        Discards the selected route's invalid draft, retains the last validated
+        route, increments the itinerary version and clears savedVersion.
+      parameters:
+        - $ref: '#/components/parameters/ItineraryId'
+        - $ref: '#/components/parameters/RouteId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [baseVersion]
+              properties:
+                baseVersion: { type: integer, minimum: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/Itinerary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ValidationError' }
+        '422': { description: Selected route has no invalid draft to restore }
   /v1/itineraries/{id}/share:
     post:
       operationId: createShareSnapshot
@@ -254,6 +317,11 @@ paths:
         '404': { $ref: '#/components/responses/ValidationError' }
 components:
   parameters:
+    SessionToken:
+      in: header
+      name: x-session-token
+      required: true
+      schema: { type: string, minLength: 20 }
     ItineraryId:
       in: path
       name: id
@@ -281,6 +349,51 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
   schemas:
+    Session:
+      type: object
+      additionalProperties: false
+      required: [id, revision, preference, phase, itineraryIds, messages]
+      properties:
+        id: { type: string, format: uuid }
+        revision: { type: integer, minimum: 0 }
+        preference: { $ref: '#/components/schemas/PreferenceExtraction' }
+        phase: { type: string, enum: [collecting, needs_user_input, ready_for_planner, complete, degraded, invalid_draft, no_route, error] }
+        itineraryIds: { type: array, items: { type: string, format: uuid } }
+        itineraryId: { type: string, format: uuid }
+        routeId: { type: string, format: uuid }
+        messages:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [role, text, createdAt]
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              text: { type: string }
+              createdAt: { type: string }
+    SessionResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, session]
+      properties:
+        requestId: { type: string, format: uuid }
+        session: { $ref: '#/components/schemas/Session' }
+    TurnResult:
+      type: object
+      additionalProperties: false
+      required: [requestId, session, intent, source, message, missingFields, fieldsToAsk, warnings, steps, actions]
+      properties:
+        requestId: { type: string, format: uuid }
+        session: { $ref: '#/components/schemas/Session' }
+        intent: { type: string, enum: [collect_preference, edit_route, explain_route, regenerate, unknown] }
+        source: { type: string, enum: [dify, native, fallback, form] }
+        message: { type: string }
+        missingFields: { type: array, items: { type: string } }
+        fieldsToAsk: { type: array, maxItems: 3, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+        steps: { type: array, items: { type: string } }
+        itinerary: { $ref: '#/components/schemas/Itinerary' }
+        actions: { type: array, items: { type: string, enum: [confirm_preferences, adjust_preferences, retry, restore, auto_trim, edit, compare] } }
     Coordinate:
       type: object
       additionalProperties: false
@@ -306,7 +419,18 @@ components:
         category: { type: string, minLength: 1, maxLength: 40 }
         tags: { type: array, maxItems: 8, items: { type: string, minLength: 1, maxLength: 30 } }
         place: { $ref: '#/components/schemas/Place' }
-        stayMinutes: { type: integer, minimum: 10, maximum: 180 }
+        placeKind: { type: string, enum: [venue, landmark, area, connector] }
+        stayMinutes: { type: integer, minimum: 1, maximum: 180 }
+    PoiInsight:
+      type: object
+      additionalProperties: false
+      required: [poiId, matchedPreferences, evidence, risks, confidence]
+      properties:
+        poiId: { type: string, minLength: 1 }
+        matchedPreferences: { type: array, maxItems: 8, items: { type: string, minLength: 1, maxLength: 40 } }
+        evidence: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 160 } }
+        risks: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 160 } }
+        confidence: { type: string, enum: [high, medium, low] }
     RouteLeg:
       type: object
       additionalProperties: false
@@ -340,9 +464,14 @@ components:
         totalDurationMinutes: { type: integer, minimum: 1, maximum: 240 }
         totalDistanceMeters: { type: integer, minimum: 0, maximum: 50000 }
         bufferMinutes: { type: integer, minimum: 0, maximum: 240 }
+        remainingMinutes: { type: integer, minimum: 0, maximum: 240 }
         walkingIntensity: { type: string, enum: [low, medium, high] }
         constraintStatus: { type: string, const: valid }
         recommendationReason: { type: string, minLength: 1, maxLength: 500 }
+        experienceStory: { type: string, minLength: 1, maxLength: 180 }
+        matchedPreferences: { type: array, maxItems: 8, items: { type: string, minLength: 1, maxLength: 40 } }
+        tradeoff: { type: string, minLength: 1, maxLength: 180 }
+        poiInsights: { type: array, maxItems: 8, items: { $ref: '#/components/schemas/PoiInsight' } }
         risks: { type: array, maxItems: 8, items: { type: string, enum: [OPENING_HOURS_UNCERTAIN, MAP_UNAVAILABLE, POI_DATA_PARTIAL, ROUTE_TIME_TIGHT, PREFERENCE_RELAXED, ROUTE_COUNT_LIMITED] } }
     Itinerary:
       type: object
@@ -358,6 +487,28 @@ components:
         generatedAt: { type: string, format: date-time }
         policyVersion: { type: string, minLength: 1 }
         savedVersion: { type: [integer, 'null'], minimum: 1 }
+        invalidDraft: { $ref: '#/components/schemas/InvalidDraft' }
+    InvalidDraft:
+      type: object
+      additionalProperties: false
+      required: [routeId, pois, violations]
+      properties:
+        routeId: { type: string, format: uuid }
+        pois: { type: array, minItems: 1, maxItems: 8, items: { $ref: '#/components/schemas/Poi' } }
+        totalDurationMinutes: { type: number, minimum: 0 }
+        totalDistanceMeters: { type: number, minimum: 0 }
+        violations:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, message]
+            properties:
+              code: { type: string }
+              message: { type: string }
+              excessMinutes: { type: number, minimum: 0 }
+              poiId: { type: string }
     ItineraryResponse:
       type: object
       additionalProperties: false
@@ -427,7 +578,15 @@ components:
       properties:
         originLabel: { type: string, minLength: 1, maxLength: 120 }
         startTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
-        availableMinutes: { type: integer, enum: [60, 120, 180, 240] }
+        availableMinutes: { type: integer, minimum: 30, maximum: 240 }
+        customPreferences: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 30 } }
+        mustHave: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        niceToHave: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        avoid: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        party: { type: string, enum: [solo, couple, family, senior, wheelchair] }
+        timePolicy: { type: string, enum: [hard, flexible] }
+        mobilityPolicy: { type: string, enum: [hard, preferred] }
+        notes: { type: string, maxLength: 300 }
         playPreferences:
           type: array
           minItems: 1
@@ -445,7 +604,15 @@ components:
       properties:
         originLabel: { type: string, minLength: 1, maxLength: 120 }
         startTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
-        availableMinutes: { type: integer, enum: [60, 120, 180, 240] }
+        availableMinutes: { type: integer, minimum: 30, maximum: 240 }
+        customPreferences: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 30 } }
+        mustHave: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        niceToHave: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        avoid: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        party: { type: string, enum: [solo, couple, family, senior, wheelchair] }
+        timePolicy: { type: string, enum: [hard, flexible] }
+        mobilityPolicy: { type: string, enum: [hard, preferred] }
+        notes: { type: string, maxLength: 300 }
         playPreferences:
           type: array
           maxItems: 3

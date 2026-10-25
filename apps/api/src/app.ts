@@ -11,7 +11,7 @@ import { FilePlanStore, type PlanStore } from './store.js';
 import { PostgresPlanStore } from './pg-store.js';
 import { DifyWorkflowAgent, NativeAgentOrchestrator, type AgentOrchestrator } from './agent.js';
 import { FileSessionStore, MemorySessionStore, PgSessionStore, authorized, newSession, type SessionRecord, type SessionStore } from './session-store.js';
-import { editRoute, resolveNaturalEdit, WorkflowError } from './route-service.js';
+import { editRoute, resolveNaturalEdit, restoreRoute, WorkflowError } from './route-service.js';
 
 const fields = ['originLabel', 'startTime', 'availableMinutes', 'playPreferences', 'travelPreferences'] as const;
 const idParams = z.object({ id: z.string().uuid() });
@@ -27,7 +27,19 @@ export function createApp(options: AppOptions = {}) {
   const clarificationWriter = options.clarificationWriter ?? llm;
   const copyWriter = options.copyWriter ?? llm;
   const nativeAgent = new NativeAgentOrchestrator(parser, clarificationWriter);
-  const agent = options.agent ?? (process.env.DIFY_API_KEY ? new DifyWorkflowAgent({ apiKey: process.env.DIFY_API_KEY, baseUrl: process.env.DIFY_BASE_URL ?? 'http://127.0.0.1', workflowPath: process.env.DIFY_WORKFLOW_PATH }) : nativeAgent);
+  const agent: AgentOrchestrator = options.agent ?? (process.env.DIFY_API_KEY ? new DifyWorkflowAgent({ apiKey: process.env.DIFY_API_KEY, baseUrl: process.env.DIFY_BASE_URL ?? 'http://127.0.0.1', workflowPath: process.env.DIFY_WORKFLOW_PATH }) : nativeAgent);
+  // Serialize reads and writes for one session, including idempotent retries.
+  // Multi-process deployment still requires a shared transaction/lock strategy.
+  const sessionTurns = new Map<string, Promise<void>>();
+  async function inSessionOrder<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = sessionTurns.get(id) ?? Promise.resolve();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    sessionTurns.set(id, pending);
+    await previous;
+    try { return await operation(); }
+    finally { release(); if (sessionTurns.get(id) === pending) sessionTurns.delete(id); }
+  }
   const map = options.map ?? (process.env.DEMO_MAP === 'true' ? new DemoMapProvider() : new AMapProvider(process.env.AMAP_WEB_KEY));
   const store: PlanStore = options.store ?? (process.env.DATABASE_URL
     ? new PostgresPlanStore(process.env.DATABASE_URL)
@@ -78,29 +90,39 @@ export function createApp(options: AppOptions = {}) {
     const created = newSession(); await sessionStore.put(created.record);
     return reply.code(201).send({ requestId: request.id, token: created.token, session: created.record.session });
   });
+  app.get('/v1/sessions/:id', async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send(validationError(request.id, params.error.issues));
+    const record = await sessionStore.get(params.data.id);
+    if (!authorized(record, String(request.headers['x-session-token'] ?? '')) || !record) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '会话不存在或令牌无效。'));
+    return reply.send({ requestId: request.id, session: SessionSchema.parse(record.session) });
+  });
   app.post('/v1/sessions/:id/turns', async (request, reply) => {
     const params = idParams.safeParse(request.params); const body = TurnRequestSchema.safeParse(request.body);
     if (!params.success) return reply.code(400).send(validationError(request.id, params.error.issues));
     if (!body.success) return reply.code(400).send(validationError(request.id, body.error.issues));
-    let record = await sessionStore.get(params.data.id);
-    const token = String(request.headers['x-session-token'] ?? '');
-    if (!authorized(record, token)) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '会话不存在或令牌无效。'));
-    if (!record) return reply.code(404).send(apiError(request.id, 'NOT_FOUND', '会话不存在。'));
-    const fingerprint = JSON.stringify(body.data);
-    const previous = record.turns[body.data.turnId];
-    if (previous?.fingerprint === fingerprint) return reply.send(previous.result);
-    try {
-      const result = await handleTurn(record, body.data, { agent, nativeAgent, map, store, requestId: request.id });
-      record.turns[body.data.turnId] = { fingerprint, result };
-      await sessionStore.put(record);
-      return reply.send(result);
-    } catch (error) { return sendError(reply, request.id, error); }
+    return inSessionOrder(params.data.id, async () => {
+      const record = await sessionStore.get(params.data.id);
+      const token = String(request.headers['x-session-token'] ?? '');
+      if (!authorized(record, token)) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '会话不存在或令牌无效。'));
+      if (!record) return reply.code(404).send(apiError(request.id, 'NOT_FOUND', '会话不存在。'));
+      const fingerprint = JSON.stringify(body.data);
+      const previous = record.turns[body.data.turnId];
+      if (previous?.fingerprint === fingerprint) return reply.send(previous.result);
+      if (previous) return reply.code(409).send(apiError(request.id, 'VERSION_CONFLICT', '同一轮请求不能使用不同内容，请重新发送。'));
+      try {
+        const result = await handleTurn(record, body.data, { agent, nativeAgent, map, store, requestId: request.id });
+        record.turns[body.data.turnId] = { fingerprint, result };
+        await sessionStore.put(record);
+        return reply.send(result);
+      } catch (error) { return sendError(reply, request.id, error); }
+    });
   });
   app.post('/internal/planner/merge-and-check', async (request, reply) => {
     if (!internalAuthorized(request.headers['x-planner-token'])) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '内部接口未授权。'));
     const body = z.object({ current: PreferenceExtractionSchema, patch: PreferenceExtractionSchema }).strict().safeParse(request.body);
     if (!body.success) return reply.code(400).send(validationError(request.id, body.error.issues));
-    const preference = mergePreference(body.data.current, body.data.patch); const missingFields = fields.filter((field) => preference[field] === undefined);
+    const preference = mergePreference(body.data.current, body.data.patch); const missingFields = missingPreferenceFields(preference);
     return reply.send({ requestId: request.id, preference, missingFields, ready: missingFields.length === 0 });
   });
   app.post('/internal/planner/generate', async (request, reply) => {
@@ -122,10 +144,10 @@ export function createApp(options: AppOptions = {}) {
     try {
       const decision = await agent.decide({ text: parsed.data.text, preference: {}, phase: 'collecting' });
       const preference = PreferenceExtractionSchema.parse(decision.patch);
-      const missingFields = fields.filter((field) => preference[field] === undefined);
+      const missingFields = missingPreferenceFields(preference);
       let message = missingFields.length ? '还需要确认几项出行条件。' : '偏好已提取，请核对后继续规划。';
       if (missingFields.length) try { message = z.string().min(1).max(180).parse(await clarificationWriter.writeClarification({ missingFields })); } catch { /* Keep deterministic prompt. */ }
-      const response: ClarificationResponse = { requestId: request.id, status: missingFields.length ? 'needs_user_input' : 'ready_for_planner', preference, missingFields, message, source: agent.source === 'fallback' ? 'fallback' : 'llm' };
+      const response: ClarificationResponse = { requestId: request.id, status: missingFields.length ? 'needs_user_input' : 'ready_for_planner', preference, missingFields, message, source: agent.source === 'fallback' || decision.usedFallback ? 'fallback' : 'llm' };
       return reply.send(response);
     } catch {
       const response: ClarificationResponse = { requestId: request.id, status: 'needs_user_input', preference: {}, missingFields: [...fields], message: '请在表单中确认出行条件。', source: 'fallback' };
@@ -175,6 +197,16 @@ export function createApp(options: AppOptions = {}) {
     try { const result = await editRoute(store, map, parsed.data.id, parsed.data.routeId, command.data); return reply.send({ requestId: request.id, itinerary: result.itinerary }); }
     catch (error) { return sendError(reply, request.id, error); }
   });
+  app.post('/v1/itineraries/:id/routes/:routeId/restore', async (request, reply) => {
+    const parsed = routeParams.safeParse(request.params);
+    const body = z.object({ baseVersion: z.number().int().min(1) }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(validationError(request.id, parsed.error.issues));
+    if (!body.success) return reply.code(400).send(validationError(request.id, body.error.issues));
+    try {
+      const result = await restoreRoute(store, parsed.data.id, body.data.baseVersion, parsed.data.routeId);
+      return reply.send({ requestId: request.id, itinerary: result.itinerary });
+    } catch (error) { return sendError(reply, request.id, error); }
+  });
   app.post('/v1/itineraries/:id/save', async (request, reply) => {
     const parsed = idParams.safeParse(request.params); const body = z.object({ baseVersion: z.number().int().min(1) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(validationError(request.id, parsed.error.issues));
@@ -211,11 +243,14 @@ function sendError(reply: { code: (status: number) => { send: (data: ApiError) =
 }
 
 function internalAuthorized(value: unknown) { return !process.env.PLANNER_INTERNAL_TOKEN || value === process.env.PLANNER_INTERNAL_TOKEN; }
-function mergePreference(current: PreferenceExtraction, patch: PreferenceExtraction): PreferenceExtraction {
-  const merged = { ...current, ...patch };
-  if (current.playPreferences || patch.playPreferences) merged.playPreferences = [...new Set([...(current.playPreferences ?? []), ...(patch.playPreferences ?? [])])].slice(-3);
-  if (current.travelPreferences || patch.travelPreferences) merged.travelPreferences = [...new Set([...(current.travelPreferences ?? []), ...(patch.travelPreferences ?? [])])].slice(0, 5) as PreferenceExtraction['travelPreferences'];
-  if (current.customPreferences || patch.customPreferences) merged.customPreferences = [...new Set([...(current.customPreferences ?? []), ...(patch.customPreferences ?? [])])].slice(-5);
+function missingPreferenceFields(preference: PreferenceExtraction) { return fields.filter((field) => preference[field] === undefined || (Array.isArray(preference[field]) && !preference[field].length)); }
+function mergePreference(current: PreferenceExtraction, patch: PreferenceExtraction, append = false): PreferenceExtraction {
+  const merged = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+  if (append) {
+    if (patch.playPreferences) merged.playPreferences = [...new Set([...(current.playPreferences ?? []), ...patch.playPreferences])].slice(-3);
+    if (patch.travelPreferences) merged.travelPreferences = [...new Set([...(current.travelPreferences ?? []), ...patch.travelPreferences])].slice(0, 5) as PreferenceExtraction['travelPreferences'];
+    if (patch.customPreferences) merged.customPreferences = [...new Set([...(current.customPreferences ?? []), ...patch.customPreferences])].slice(-5);
+  }
   return PreferenceExtractionSchema.parse(merged);
 }
 
@@ -225,20 +260,20 @@ async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnReq
   session.messages.push({ role: 'user', text: request.text, createdAt: new Date().toISOString() });
   let decision: AgentDecision; let source: TurnResult['source'] = deps.agent.source;
   try {
-    if (request.action === 'confirm_preferences') decision = { intent: 'collect_preference', patch: request.preferencePatch ?? {} };
-    else if (request.action === 'regenerate') decision = { intent: 'regenerate', patch: {} };
+    if (request.action === 'confirm_preferences') { decision = { intent: 'collect_preference', patch: request.preferencePatch ?? {} }; source = 'form'; }
+    else if (request.action === 'regenerate') decision = { intent: 'regenerate', patch: request.preferencePatch ?? {} };
     else if (request.action === 'explain_route') decision = { intent: 'explain_route', patch: {} };
-    else decision = await deps.agent.decide({ text: request.text, preference: session.preference, phase: session.phase });
+    else { const result = await deps.agent.decide({ text: request.text, preference: session.preference, phase: session.phase }); decision = result; if (result.usedFallback) source = 'fallback'; }
   } catch {
     source = 'fallback';
     try { decision = await deps.nativeAgent.decide({ text: request.text, preference: session.preference, phase: session.phase }); }
     catch { decision = { intent: 'unknown', patch: {} }; }
   }
-  session.preference = mergePreference(session.preference, decision.patch);
-  const missingFields = fields.filter((field) => session.preference[field] === undefined);
-  if (decision.intent === 'collect_preference' && missingFields.length) {
+  session.preference = mergePreference(session.preference, decision.patch, request.action === 'message' && /也|还想|另外|同时/.test(request.text) && !/只|不要|不想|改为|改成/.test(request.text));
+  const missingFields = missingPreferenceFields(session.preference);
+  if (['collect_preference', 'regenerate'].includes(decision.intent) && missingFields.length) {
     session.phase = 'needs_user_input'; let message: string;
-    try { message = await deps.agent.clarify(missingFields); } catch { message = await deps.nativeAgent.clarify(missingFields); }
+    try { message = z.string().trim().min(1).max(240).parse(await deps.agent.clarify(missingFields.slice(0, 3))); } catch { message = await deps.nativeAgent.clarify(missingFields); }
     session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
     return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields, fieldsToAsk: missingFields.slice(0, 3), warnings: [], steps: ['解析本轮偏好', '合并会话偏好', '等待补充必填条件'], actions: ['confirm_preferences', 'adjust_preferences'] };
   }
@@ -247,23 +282,47 @@ async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnReq
     session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
     return { requestId: deps.requestId, session, intent: 'unknown', source, message, missingFields, fieldsToAsk: [], warnings: [], steps: ['识别到无法判断的操作'], actions: ['adjust_preferences'] };
   }
+  if (decision.intent === 'explain_route') {
+    const itineraryId = request.itineraryId ?? session.itineraryId;
+    const plan = itineraryId ? await deps.store.getPlan(itineraryId) : null;
+    const route = plan?.itinerary.routes.find((item) => item.id === (request.routeId ?? session.routeId)) ?? (!request.routeId ? plan?.itinerary.routes[0] : undefined);
+    if (!plan || !route) {
+      const message = '先选择一条路线，我会根据已验证的地点、时间和取舍解释安排。';
+      session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
+      return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields, fieldsToAsk: [], warnings: [], steps: ['等待选择路线'], actions: ['compare'] };
+    }
+    if (plan.ownerSessionId && plan.ownerSessionId !== session.id) throw new WorkflowError('这条行程属于另一会话，请返回原会话后继续。', 403);
+    session.itineraryId = plan.itinerary.id; session.routeId = route.id; session.preference = plan.itinerary.preference;
+    const message = `${route.recommendationReason} ${route.tradeoff ?? ''} 预计共 ${route.totalDurationMinutes} 分钟，可用时间余量 ${route.remainingMinutes ?? route.bufferMinutes} 分钟；按 ${route.pois.map((poi) => poi.name).join(' → ')} 的顺序出行。营业、预约和现场交通仍需出发前确认。`;
+    session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
+    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: route.risks, steps: ['读取已验证路线', '解释推荐理由与取舍'], itinerary: plan.itinerary, actions: ['compare', 'edit'] };
+  }
   if (decision.intent === 'edit_route') {
     const itineraryId = request.itineraryId ?? session.itineraryId; const routeId = request.routeId ?? session.routeId;
     if (!itineraryId || !routeId || !decision.edit) { const message = '请先打开一条路线，并明确要添加、删除、替换或排序的地点。'; return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: [], steps: ['等待路线编辑上下文'], actions: ['edit'] }; }
     const plan = await deps.store.getPlan(itineraryId); if (!plan) throw new WorkflowError('行程不存在。', 404);
+    if (plan.ownerSessionId && plan.ownerSessionId !== session.id) throw new WorkflowError('这条行程属于另一会话，请返回原会话后继续。', 403);
     const command = resolveNaturalEdit(plan, routeId, decision.edit); if (request.baseVersion) command.baseVersion = request.baseVersion;
     const result = await editRoute(deps.store, deps.map, itineraryId, routeId, command);
     session.itineraryId = itineraryId; session.routeId = routeId; session.itineraryIds = [...new Set([...session.itineraryIds, itineraryId])];
-    const itinerary = result.itinerary; session.phase = itinerary.invalidDraft ? 'invalid_draft' : 'complete';
+    const itinerary = result.itinerary; session.preference = itinerary.preference; session.phase = itinerary.invalidDraft ? 'invalid_draft' : itinerary.status;
     const message = itinerary.invalidDraft ? '编辑已保留为草稿，但暂未通过时间或距离约束。' : '路线已按你的指令重新校验。';
     session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
-    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: itinerary.invalidDraft ? itinerary.invalidDraft.violations.map((v) => v.message) : [], steps: ['解析编辑命令', '确定性重算路线', '校验时间与距离约束'], itinerary, actions: itinerary.invalidDraft ? ['restore', 'auto_trim', 'adjust_preferences'] : ['compare', 'edit'] };
+    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: itinerary.invalidDraft ? itinerary.invalidDraft.violations.map((v) => v.message) : [], steps: ['解析编辑命令', '确定性重算路线', '校验时间与距离约束'], itinerary, actions: itinerary.invalidDraft ? ['restore', 'edit', 'adjust_preferences'] : ['compare', 'edit'] };
   }
   if (missingFields.length) throw new WorkflowError('请先补充出行条件。');
   const preference = PreferenceDraftSchema.parse(session.preference);
   const previousPlans = await Promise.all(session.itineraryIds.map((id) => deps.store.getPlan(id)));
   const previousSignatures = previousPlans.flatMap((plan) => plan?.itinerary.routes.map((r) => r.pois.map((p) => p.id).join('|')) ?? []);
-  const generated = await generateItinerary(preference, deps.map, previousSignatures);
+  let generated;
+  try { generated = await generateItinerary(preference, deps.map, previousSignatures); }
+  catch (error) {
+    if (!(error instanceof MapProviderError) && !(error instanceof PlannerError)) throw error;
+    session.phase = error instanceof PlannerError ? 'no_route' : 'error';
+    const message = `${error.message} 已保留你的出行条件，可以调整条件或重试。`;
+    session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
+    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: [error.code], steps: ['已保存出行条件', '规划暂未完成'], actions: ['retry', 'adjust_preferences'] };
+  }
   await deps.store.putPlan({ ...generated, ownerSessionId: session.id });
   session.itineraryId = generated.itinerary.id; session.routeId = generated.itinerary.routes[0]?.id; session.itineraryIds = [...new Set([...session.itineraryIds, generated.itinerary.id])];
   session.phase = generated.itinerary.status === 'degraded' ? 'degraded' : 'complete';

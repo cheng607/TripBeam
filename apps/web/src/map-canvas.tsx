@@ -19,6 +19,13 @@ function wgsToGcj({ lat, lng }: { lat: number; lng: number }) {
   return { lat: lat + dLat * 180 / ((6335552.717000426 / (magic * sqrtMagic)) * Math.PI), lng: lng + dLng * 180 / ((6378245 / sqrtMagic) * Math.cos(radLat) * Math.PI) };
 }
 const displayCoordinate = (coordinate: { lat: number; lng: number }) => coordinateSystem === 'gcj02' ? wgsToGcj(coordinate) : coordinate;
+// Leaflet treats string tooltips as HTML. Labels can originate with users or
+// external map providers, so keep them as text nodes throughout the map UI.
+function tooltipText(value: string): HTMLElement {
+  const element = document.createElement('span');
+  element.textContent = value;
+  return element;
+}
 
 export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute }: { origin: Place; routes: TripRoute[]; activeRouteId: string; activeStopIndex?: number; onSelectStop?: (index: number) => void; onSelectRoute?: (id: string) => void }) {
   const element = useRef<HTMLDivElement>(null);
@@ -36,6 +43,7 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
     const sizeObserver = new ResizeObserver(() => instance.invalidateSize());
     sizeObserver.observe(element.current);
     const tileUrl = import.meta.env.VITE_MAP_TILE_URL;
+    setTileFailed(false);
     if (!tileUrl) setTileFailed(true);
     else L.tileLayer(tileUrl, { maxZoom: 19, attribution: import.meta.env.VITE_MAP_ATTRIBUTION ?? '地图数据服务商' }).on('tileerror', () => setTileFailed(true)).addTo(instance);
     return () => { sizeObserver.disconnect(); instance.remove(); map.current = null; };
@@ -47,7 +55,7 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
     const group = L.layerGroup().addTo(instance);
     const displayOrigin = displayCoordinate(origin.coordinate);
     const bounds = L.latLngBounds([[displayOrigin.lat, displayOrigin.lng]]);
-    L.circleMarker([displayOrigin.lat, displayOrigin.lng], { radius: 8, color: '#1f2d27', fillColor: '#fffefb', fillOpacity: 1, weight: 3 }).bindTooltip(`出发点：${origin.label}`).addTo(group);
+    L.circleMarker([displayOrigin.lat, displayOrigin.lng], { radius: 8, color: '#1f2d27', fillColor: '#fffefb', fillOpacity: 1, weight: 3 }).bindTooltip(tooltipText(`出发点：${origin.label}`)).addTo(group);
     routes.map((route, routeIndex) => ({ route, routeIndex }))
       .sort((a, b) => Number(a.route.id === activeRouteId) - Number(b.route.id === activeRouteId))
       .forEach(({ route, routeIndex }) => {
@@ -62,7 +70,7 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
         if (!active) L.polyline(points, { color, weight: 14, opacity: .28, interactive: false }).addTo(group);
         const line = L.polyline(points, { color, weight: active ? 7 : 4, opacity: active ? 1 : .82 }).addTo(group);
         for (const point of points) bounds.extend(point);
-        line.bindTooltip(`${route.title} · ${leg.mode}`);
+        line.bindTooltip(tooltipText(`${route.title} · ${leg.mode}`));
         if (onSelectRoute) line.on('click', () => onSelectRoute(route.id));
       }
       route.pois.forEach((poi, index) => {
@@ -73,9 +81,9 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
           const markerSize = onSelectRoute ? 26 : 32;
           const selected = index === activeStopIndex;
           L.marker(point, { zIndexOffset: selected ? 1_000 : 0, icon: L.divIcon({ className: `trip-marker${selected ? ' is-selected' : ''}`, html: `<span style="--marker-color:${color}">${index + 1}</span>`, iconSize: [markerSize, markerSize], iconAnchor: [markerSize / 2, markerSize / 2] }) })
-            .bindTooltip(poi.name).on('click', () => onSelectStop?.(index)).addTo(group);
+            .bindTooltip(tooltipText(poi.name)).on('click', () => onSelectStop?.(index)).addTo(group);
         } else {
-          const marker = L.circleMarker(point, { radius: 5, color, weight: 2, fillColor: '#fffefb', fillOpacity: .95, opacity: .85 }).bindTooltip(`${route.title} · ${poi.name}`).addTo(group);
+          const marker = L.circleMarker(point, { radius: 5, color, weight: 2, fillColor: '#fffefb', fillOpacity: .95, opacity: .85 }).bindTooltip(tooltipText(`${route.title} · ${poi.name}`)).addTo(group);
           if (onSelectRoute) marker.on('click', () => onSelectRoute(route.id));
         }
       });

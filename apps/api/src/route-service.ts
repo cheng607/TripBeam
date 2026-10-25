@@ -49,7 +49,12 @@ export async function editRoute(store: PlanStore, map: MapProvider, id: string, 
   return result;
 }
 
-export async function restoreRoute(store: PlanStore, id: string, baseVersion: number) {
+export async function restoreRoute(store: PlanStore, id: string, baseVersion: number, routeId?: string) {
+  const existing = await store.getPlan(id);
+  if (!existing) throw new WorkflowError('行程不存在。', 404);
+  if (existing.itinerary.version !== baseVersion) throw new WorkflowError('行程已更新，请刷新后重试。', 409);
+  if (routeId && !existing.itinerary.routes.some((route) => route.id === routeId)) throw new WorkflowError('路线不存在。', 404);
+  if (!existing.itinerary.invalidDraft || (routeId && existing.itinerary.invalidDraft.routeId !== routeId)) throw new WorkflowError('当前路线没有需要恢复的草稿。');
   const result = await store.updatePlan(id, baseVersion, (plan) => ({ ...plan, itinerary: { ...plan.itinerary, version: baseVersion + 1, savedVersion: null, invalidDraft: undefined } }));
   if (!result || result === 'conflict') throw new WorkflowError('版本已更新，请刷新后重试。', 409);
   return result;
@@ -60,8 +65,18 @@ export function resolveNaturalEdit(plan: StoredPlan, routeId: string, edit: Natu
   const route = plan.itinerary.routes.find((r) => r.id === routeId);
   if (!route) throw new WorkflowError('请先选择要编辑的路线。');
   const current = plan.itinerary.invalidDraft?.routeId === routeId ? plan.itinerary.invalidDraft.pois : route.pois;
-  const resolve = (name: string | undefined, choices: Poi[]) => {
+  const resolve = (name: string | undefined, choices: Poi[], allowPosition = false) => {
     if (!name) throw new WorkflowError('请明确要操作的地点名称。');
+    if (allowPosition) {
+      const ordinal = name.match(/^第([1-8一二两三四五六七八])站$/);
+      const ordinalNumbers: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8 };
+      const position = name === '最后一站' ? choices.length : ordinal ? ordinalNumbers[ordinal[1]!] ?? Number(ordinal[1]) : undefined;
+      if (position !== undefined) {
+        const poi = choices[position - 1];
+        if (!poi) throw new WorkflowError(`当前路线只有 ${choices.length} 站，请确认要操作的站点。`);
+        return poi.id;
+      }
+    }
     const exact = choices.filter((p) => p.id === name || p.name === name);
     const matches = exact.length ? exact : choices.filter((p) => p.name.includes(name));
     if (matches.length !== 1) throw new WorkflowError(matches.length ? `“${name}”匹配多个地点，请使用完整名称或在列表中选择。` : `没有找到“${name}”，请从候选地点中选择。`);
@@ -69,9 +84,9 @@ export function resolveNaturalEdit(plan: StoredPlan, routeId: string, edit: Natu
   };
   const baseVersion = plan.itinerary.version;
   switch (edit.operation) {
-    case 'remove': return { operation: 'remove', baseVersion, poiId: resolve(edit.target, current) };
+    case 'remove': return { operation: 'remove', baseVersion, poiId: resolve(edit.target, current, true) };
     case 'add': return { operation: 'add', baseVersion, poiId: resolve(edit.replacement ?? edit.target, plan.candidates) };
-    case 'replace': return { operation: 'replace', baseVersion, poiId: resolve(edit.target, current), replacementPoiId: resolve(edit.replacement, plan.candidates) };
-    case 'reorder': return { operation: 'reorder', baseVersion, poiIds: (edit.order ?? []).map((name) => resolve(name, current)) };
+    case 'replace': return { operation: 'replace', baseVersion, poiId: resolve(edit.target, current, true), replacementPoiId: resolve(edit.replacement, plan.candidates) };
+    case 'reorder': return { operation: 'reorder', baseVersion, poiIds: (edit.order ?? []).map((name) => resolve(name, current, true)) };
   }
 }

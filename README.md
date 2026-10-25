@@ -26,11 +26,14 @@ pnpm dev
 
 ## 功能流程
 
-1. 首页文本经 DeepSeek 提取偏好；模型不可用时回退为手动补充弹窗。填写出发点、开始时间、1–4 小时、游玩及出行偏好。
+1. 从一句自然语言或逐项选择开始，旅行助手提取偏好并补问缺失条件。支持 30 分钟至 4 小时；右侧出行摘要可直接修改。模型不可用时使用规则提取和结构化点选继续流程。
 2. 后端按时间预算与用户允许的交通方式推导发现范围，查询真实 POI；以深度、漫游、轻松三种不同目标函数组路，并用高德路网查询每段时间、距离和 geometry，再由程序重新排期、校验。正常返回至少两条；不足时显式降级，完全无法满足时返回错误，不使用示意地图或虚构路线。
-3. 对比页在真实底图叠加全部路线，当前路线高亮、其他路线淡化。不同方案使用显著不同的颜色。
-4. 编辑页可增删、替换和调整地点顺序。每次编辑携带 `baseVersion`，后端重新查询路网并校验后才更新版本。保存后才能创建不可变分享快照。
+3. 对比页展示体验主线、时间、距离、步行强度、推荐依据及取舍。可继续询问推荐理由或按当前条件再找一组方案。地图叠加全部路线，当前路线高亮、其他路线淡化。
+4. 编辑页可增删、替换和调整地点顺序，也可使用「删掉第二站」等自然语言指令。每次编辑携带 `baseVersion`，后端重新查询路网。超出约束的修改保留为待处理草稿，界面显示原因并提供恢复有效路线；处理草稿后才能保存分享。分享页可复制链接或行程清单，复制被浏览器拒绝时提供手动复制内容。
 5. 地图瓦片加载失败时仍保留路线事实和地点清单，不由模型猜测路径。营业、预约及现场信息需要出发前核实。
+6. 同一浏览器标签页通过 `sessionStorage` 保留会话令牌和摘要，刷新、返回调整可继续对话。服务端验证令牌后恢复会话；网络失败保留输入，可重试。生成路线失败时保留已确认条件，调整后可以再次规划。
+
+本轮产品与体验设计见 [旅行 Agent 体验](docs/product-agent-experience.md)，测试范围及外部联调边界见 [验收记录](docs/agent-qa.md)。该版本继续聚焦单城短途旅行；预算金额、实时营业/排队、预约和多日行程尚未作为硬约束实现。
 
 路线时间为基于开始时间、路网时长、建议停留和 10 分钟缓冲的**规划估计**；尚无实时营业、实时交通、预约或用户账户接入。公开底图默认使用 OSM 瓦片并显示 attribution；生产流量请配置符合服务条款的瓦片提供方。高德服务端坐标在地图展示前转换为 WGS-84，避免路线与底图错位。
 
@@ -45,7 +48,7 @@ pnpm dev
 - `apps/api/src/store.ts` / `pg-store.ts`：本地文件存储 / PostgreSQL 事务存储、乐观锁和不可变分享快照。
 - `packages/contracts`：前后端共享 Zod Schema，`docs/openapi.yaml`：OpenAPI 3.1 契约。
 
-主要端点：`POST /v1/conversations/{conversationId}/messages`、`POST /v1/itineraries/generate`、`GET /v1/itineraries/{id}`、`POST /v1/itineraries/{id}/routes/{routeId}/edits`、`POST /v1/itineraries/{id}/save`、`POST /v1/itineraries/{id}/share`、`GET /v1/shares/{token}`。完整请求与响应见 OpenAPI。
+主要端点：`POST /v1/sessions`、`GET /v1/sessions/{id}`、`POST /v1/sessions/{id}/turns`（读取/提交会话需 `x-session-token`）、`POST /v1/itineraries/generate`、`GET /v1/itineraries/{id}`、`POST /v1/itineraries/{id}/routes/{routeId}/edits`、`POST /v1/itineraries/{id}/routes/{routeId}/restore`、`POST /v1/itineraries/{id}/save`、`POST /v1/itineraries/{id}/share`、`GET /v1/shares/{token}`。完整请求与响应见 OpenAPI。
 
 ```powershell
 pnpm typecheck

@@ -26,7 +26,8 @@ export class ProviderInvalidResponseError extends Error {
 }
 
 const SYSTEM_PROMPT = `你是 TripBeam 的偏好提取器。只从用户文本提取明确表达的偏好，输出 JSON 对象，不能输出 Markdown。
-允许字段为 originLabel、startTime(HH:mm)、availableMinutes(30–240 的整数分钟)、playPreferences(最多3项)、travelPreferences(仅步行/自行车/公共交通/打车/自驾)、customPreferences(最多5项自由偏好)、notes(最多300字)。
+允许字段为 originLabel、startTime(HH:mm)、availableMinutes(30–240 的整数分钟)、playPreferences(最多3项)、travelPreferences(仅步行/自行车/公共交通/打车/自驾)、customPreferences(最多5项自由偏好)、mustHave/ niceToHave/ avoid(每项最多40字，每组最多5项)、party(solo/couple/family/senior/wheelchair)、timePolicy(hard/flexible)、mobilityPolicy(hard/preferred)、notes(最多300字)。
+必须保留否定约束。用户说“只步行、不打车”时 travelPreferences 只能包含步行；“下午三点”是15:00，“两个小时”只表示120分钟，不能当作出发时间。没有明确时刻时省略startTime。不要把未知的出发时间、交通方式或游玩偏好补成默认值。
 用户说“逛书店”“不吃辣”“带老人”等非标准偏好必须放入 customPreferences，不要擅自改写成路线、POI或标签。
 未知字段必须省略。绝不输出 POI、路线、距离、时长总计、路线是否合法或任何规划建议。`;
 

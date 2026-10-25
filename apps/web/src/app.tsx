@@ -1,100 +1,140 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
-import { PLAY_PREFERENCE_OPTIONS, TRAVEL_PREFERENCE_OPTIONS, type PreferenceExtraction, type TurnResult } from '@tripbeam/contracts';
-import { createSession, parseIntent, sendSessionTurn } from './api/trips';
-import { usePreferenceDraftStore } from './store/preference-draft';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { PLAY_PREFERENCE_OPTIONS, TRAVEL_PREFERENCE_OPTIONS, PreferenceExtractionSchema, type AgentSession, type PreferenceExtraction, type TurnResult } from '@tripbeam/contracts';
 import { ComparePage, EditorPage, SharePage } from './pages';
+import { PlannerJourney, PreferenceSummary } from './planner-ui';
+import { ensureAgentSession, forgetAgentSession, readCachedAgentSession, sendAgentTurn, sessionMessages, type AgentTurn } from './agent-session';
 
-type SessionIdentity = { id: string; token: string };
 type RequiredField = 'originLabel' | 'startTime' | 'availableMinutes' | 'playPreferences' | 'travelPreferences';
 type TravelPreference = (typeof TRAVEL_PREFERENCE_OPTIONS)[number];
-const DURATIONS = [60, 120, 180, 240] as const;
+const DURATIONS = [30, 60, 120, 180, 240] as const;
 const questions: Record<RequiredField, { title: string; description: string }> = {
-  originLabel: { title: '你从哪里出发？', description: '填写附近的地标、商场、酒店或地址即可。' },
-  startTime: { title: '准备几点出发？', description: '选择预计开始时间，我会据此安排每个停靠点。' },
-  availableMinutes: { title: '这次大概有多久？', description: '选择可用时长，最多规划 4 小时。' },
-  playPreferences: { title: '这次更想做什么？', description: '选择 1–3 项；模型会将其作为地点筛选方向。' },
-  travelPreferences: { title: '愿意怎样出行？', description: '可多选，我会按实际路网校验路线。' },
+  originLabel: { title: '你从哪里出发？', description: '城市加地标更准确，比如「武汉光谷广场」或酒店的完整名称。' },
+  startTime: { title: '准备几点出发？', description: '选择预计开始时间，用来安排每一站的到达和停留。' },
+  availableMinutes: { title: '留给这次出行多久？', description: '适合 30 分钟到 4 小时的城市短途探索。' },
+  playPreferences: { title: '这次更想体验什么？', description: '选择 1–3 项；其他想法也可以在对话中补充。' },
+  travelPreferences: { title: '愿意怎样出行？', description: '可多选。我们会用这些方式的路网数据检查时间和距离。' },
 };
+const requiredFields = Object.keys(questions) as RequiredField[];
+function missingPreference(preference: PreferenceExtraction): RequiredField[] {
+  return requiredFields.filter((field) => { const value = preference[field]; return value === undefined || (Array.isArray(value) && value.length === 0); });
+}
 
 function HomePage() {
   const navigate = useNavigate();
-  const persistedDraft = usePreferenceDraftStore((store) => store.draft);
-  const setPersistedDraft = usePreferenceDraftStore((store) => store.setDraft);
-  const [session, setSession] = useState<SessionIdentity>();
-  const [draft, setDraft] = useState<PreferenceExtraction>(persistedDraft);
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([{ role: 'assistant', text: '说说你这次想怎么逛吧。信息不完整也没关系，我会逐项确认后再生成路线。' }]);
-  const [missingFields, setMissingFields] = useState<RequiredField[]>([]);
+  const location = useLocation();
+  const adjustment = useRef(PreferenceExtractionSchema.safeParse(location.state?.preference));
+  const adjustedPreference = adjustment.current.success ? adjustment.current.data : undefined;
+  const initial = useRef(readCachedAgentSession());
+  const [session, setSession] = useState<AgentSession | undefined>(initial.current?.session);
+  const [draft, setDraft] = useState<PreferenceExtraction>(adjustedPreference ?? initial.current?.session.preference ?? {});
+  const [messages, setMessages] = useState(sessionMessages(initial.current?.session));
+  const [missingFields, setMissingFields] = useState<RequiredField[]>(initial.current ? missingPreference(initial.current.session.preference) : []);
+  const [editingField, setEditingField] = useState<RequiredField | undefined>(adjustedPreference ? 'originLabel' : undefined);
   const [input, setInput] = useState('');
   const [fieldValue, setFieldValue] = useState('');
   const [collecting, setCollecting] = useState(false);
+  const [restoring, setRestoring] = useState(Boolean(initial.current));
   const [notice, setNotice] = useState('');
-  const activeField = missingFields[0];
+  const [failedTurn, setFailedTurn] = useState<AgentTurn>();
+  const [steps, setSteps] = useState<string[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+  const inFlight = useRef(false);
+  const activeField = editingField ?? missingFields[0];
+  const busy = collecting || restoring;
 
-  useEffect(() => { createSession().then((created) => setSession({ id: created.session.id, token: created.token })).catch(() => undefined); }, []);
-  const selectedPlay = useMemo(() => draft.playPreferences ?? [], [draft.playPreferences]);
-  const selectedTravel = useMemo<TravelPreference[]>(() => draft.travelPreferences ?? [], [draft.travelPreferences]);
+  useEffect(() => {
+    if (!initial.current) return;
+    let active = true;
+    ensureAgentSession().then(({ session: restored }) => {
+      if (!active) return;
+      setSession(restored); if (!adjustedPreference) setDraft(restored.preference); setMessages(sessionMessages(restored));
+      setMissingFields(missingPreference(restored.preference));
+      if (restored.id !== initial.current?.session.id) setNotice('上次会话已过期，已建立新会话。请重新确认出行条件。');
+    }).catch((error) => { if (active) setNotice(error instanceof Error ? error.message : '会话暂时无法恢复。'); }).finally(() => { if (active) setRestoring(false); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!collecting) { setElapsed(0); return; }
+    const timer = window.setInterval(() => setElapsed((seconds) => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [collecting]);
+  useEffect(() => {
+    const value = activeField ? draft[activeField] : undefined;
+    setFieldValue(typeof value === 'string' ? value : '');
+  }, [activeField]);
 
   function applyTurn(result: TurnResult) {
-    setDraft(result.session.preference);
-    setMissingFields(result.missingFields.filter((field): field is RequiredField => field in questions));
-    if (result.itinerary) { setPersistedDraft(result.itinerary.preference); navigate(`/compare/${result.itinerary.id}`); return; }
-    setMessages((items) => [...items, { role: 'assistant', text: result.message }]);
-    if (result.source === 'fallback') setNotice('模型暂不可用，已使用本地规则继续收集信息。');
+    setSession(result.session); setDraft(result.session.preference); setMessages(sessionMessages(result.session));
+    setMissingFields(result.missingFields.filter((field): field is RequiredField => field in questions)); setEditingField(undefined); setSteps(result.steps);
+    if (result.source === 'fallback') setNotice('智能理解暂不可用，已用规则继续处理。你也可以点选条件完成规划。');
+    if (result.itinerary) navigate(`/compare/${result.itinerary.id}`);
   }
-  async function ensureSession(): Promise<SessionIdentity> {
-    if (session) return session;
-    const created = await createSession(); const identity = { id: created.session.id, token: created.token };
-    setSession(identity); return identity;
-  }
-  async function sendText(text: string) {
-    const trimmed = text.trim(); if (!trimmed || collecting) return;
-    setMessages((items) => [...items, { role: 'user', text: trimmed }]); setInput(''); setCollecting(true); setNotice('');
-    try { const identity = await ensureSession(); applyTurn(await sendSessionTurn(identity.id, identity.token, { turnId: crypto.randomUUID(), text: trimmed })); }
+  async function submitTurn(body: AgentTurn, retry = false) {
+    if (inFlight.current || restoring) return;
+    inFlight.current = true; setCollecting(true); setNotice(''); setFailedTurn(undefined);
+    if (!retry) setMessages((items) => [...items, { role: 'user', text: body.text }]);
+    try { applyTurn(await sendAgentTurn(body)); setInput(''); }
     catch (error) {
-      try {
-        const fallback = await parseIntent(trimmed);
-        setDraft((current) => ({ ...current, ...fallback.preference }));
-        setMissingFields(fallback.missingFields.filter((field): field is RequiredField => field in questions));
-        setMessages((items) => [...items, { role: 'assistant', text: fallback.message }]);
-      } catch { setNotice(error instanceof Error ? error.message : '暂时无法解析你的想法，请稍后再试。'); }
-    } finally { setCollecting(false); }
+      setNotice(error instanceof Error ? error.message : '暂时无法完成这次请求。你的输入已保留。'); setFailedTurn(body);
+    } finally { inFlight.current = false; setCollecting(false); }
   }
-  async function answerField(patch: PreferenceExtraction, displayText: string) {
-    if (collecting) return;
-    setMessages((items) => [...items, { role: 'user', text: displayText }]); setCollecting(true); setNotice(''); setFieldValue('');
-    try {
-      const identity = await ensureSession();
-      applyTurn(await sendSessionTurn(identity.id, identity.token, { turnId: crypto.randomUUID(), text: displayText, action: 'confirm_preferences', preferencePatch: patch }));
-    } catch (error) { setNotice(error instanceof Error ? error.message : '提交失败，请再试一次。'); }
-    finally { setCollecting(false); }
+  function sendText(text: string) {
+    if (!text.trim()) return;
+    void submitTurn({ turnId: crypto.randomUUID(), text: text.trim() });
+  }
+  function answerField(patch: PreferenceExtraction, displayText: string) {
+    const next = { ...draft, ...patch }; setDraft(next);
+    void submitTurn({ turnId: crypto.randomUUID(), text: displayText, action: 'confirm_preferences', preferencePatch: next });
+  }
+  function editField(field: keyof PreferenceExtraction) {
+    if (busy || !(field in questions)) return;
+    const key = field as RequiredField; setEditingField(key);
+    const value = draft[key]; setFieldValue(typeof value === 'string' ? value : '');
+    requestAnimationFrame(() => document.getElementById('clarify-title')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
   const toggle = (field: 'playPreferences' | 'travelPreferences', value: string) => {
-    const current = draft[field] ?? []; const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
-    if (field === 'playPreferences' && next.length > 3) { setNotice('游玩偏好最多选 3 项。'); return; }
+    const current: string[] = draft[field] ?? []; const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+    if (field === 'playPreferences' && next.length > 3) { setNotice('游玩偏好最多选择 3 项。'); return; }
     setDraft((state) => ({ ...state, [field]: next }));
   };
+  const startNew = () => {
+    if (busy) return;
+    forgetAgentSession(); setSession(undefined); setDraft({}); setMessages(sessionMessages()); setMissingFields([]); setEditingField(undefined); setInput(''); setNotice(''); setSteps([]); setFailedTurn(undefined);
+  };
   return <div className="page-shell conversation-shell">
-    <header className="topbar"><a className="brand" href="#top"><span className="brand-mark">↗</span>TripBeam</a><span className="draft-state"><span className="draft-dot" />对话会话已建立</span></header>
-    <main id="top" className="conversation-flow" aria-labelledby="page-title">
-      <p className="eyebrow">TRIPBEAM / 城市临时出行</p><h1 id="page-title">今天这几小时，<br />想怎么过？</h1><p className="intro">先随便说一句。模型只会追问真正缺少的出发条件，不再要求你填写整张偏好表。</p>
-      <div className="chat-log" aria-live="polite">{messages.map((message, index) => message.role === 'assistant' ? <ChatMessage key={`${message.text}-${index}`}>{message.text}</ChatMessage> : <div className="user-message" key={`${message.text}-${index}`}><p>{message.text}</p></div>)}{collecting && <ChatMessage>正在检查已知信息，并准备下一项问题…</ChatMessage>}</div>
-      {activeField && <ClarificationCard field={activeField} selectedPlay={selectedPlay} selectedTravel={selectedTravel} fieldValue={fieldValue} setFieldValue={setFieldValue} onToggle={toggle} onAnswer={answerField} disabled={collecting} />}
-      <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendText(input); }}><label className="sr-only" htmlFor="tripInput">描述你的出行想法</label><textarea id="tripInput" value={input} onChange={(event) => setInput(event.target.value)} rows={3} maxLength={1000} placeholder={activeField ? '也可以直接补充更多要求，例如：不想走太远、想逛书店' : '例如：下午从光谷出发，想喝咖啡散步，两个小时，步行'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-footer"><p><kbd>Enter</kbd> 发送 <span>·</span> <kbd>Shift + Enter</kbd> 换行</p><button className="send-button" type="submit" disabled={collecting || !input.trim()}>{collecting ? '正在检查…' : <>发送 <span>↑</span></>}</button></div></form>
-      {!activeField && messages.length === 1 && <div className="examples">{['下午从光谷出发，想喝咖啡散步，两个小时，步行', '今晚想吃当地菜，顺便拍照，不想太累', '我在春熙路附近，三小时，打车也可以'].map((example) => <button key={example} type="button" onClick={() => setInput(example)}>{example}</button>)}</div>}
-    </main>{notice && <div className="toast show" role="status">{notice}</div>}
+    <header className="topbar"><Link className="brand" to="/"><span className="brand-mark">↗</span>TripBeam</Link><div className="topbar-actions"><span className="draft-state">{restoring ? '正在恢复对话…' : collecting ? '旅行助手正在处理…' : session ? '本次对话已保留' : '你的城市旅行助手'}</span>{session && <button className="secondary-button" type="button" disabled={busy} onClick={startNew}>新的规划</button>}</div></header>
+    <PlannerJourney step={0} itineraryId={session?.itineraryId} />
+    <main id="top" className="planner-layout" aria-labelledby="page-title">
+      <section className="planner-main conversation-flow">
+        <p className="eyebrow">A LITTLE TIME. A NEW CITY.</p><h1 id="page-title">空出几小时，<br />遇见一座城。</h1><p className="intro">把模糊的想法交给我，一起找到适合你的城市路线。可比较、可调整，准备好就出发。</p>
+        {session?.itineraryId && <div className="resume-trip"><span>上次的路线还在，继续编辑或聊聊新的想法。</span><Link to={`/compare/${session.itineraryId}`}>继续查看方案 ↗</Link></div>}
+        <div className="chat-log" role="log" aria-label="规划对话" aria-live="polite">{messages.map((message, index) => message.role === 'assistant' ? <ChatMessage key={index}>{message.text}</ChatMessage> : <div className="user-message" key={index}><p>{message.text}</p></div>)}</div>
+        {collecting && <div className="planning-status" role="status"><span className="loading-orbit" /><div><strong>正在理解需求与检查规划条件{elapsed > 0 ? ` · ${elapsed} 秒` : ''}</strong><p>{elapsed >= 15 ? '地点和路网查询需要一些时间，请保持页面打开。' : '信息不足时会继续补问，条件完整后会查找地点并编排行程。'}</p></div></div>}
+        {activeField && <ClarificationCard field={activeField} selectedPlay={draft.playPreferences ?? []} selectedTravel={draft.travelPreferences ?? []} fieldValue={fieldValue} setFieldValue={setFieldValue} onToggle={toggle} onAnswer={answerField} disabled={busy} />}
+        {notice && <div className="inline-alert home-notice" role="status"><p>{notice}</p>{failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn(failedTurn, true)}>重试这次请求</button>}</div>}
+        {session && ['no_route', 'error'].includes(session.phase) && !failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn({ turnId: crypto.randomUUID(), text: '按已确认的条件重新规划', action: 'regenerate', preferencePatch: draft })}>按这些条件重新尝试</button>}
+        <form className="composer" onSubmit={(event) => { event.preventDefault(); sendText(input); }}>
+          <label className="sr-only" htmlFor="tripInput">描述你的出行想法</label><textarea id="tripInput" value={input} disabled={busy} onChange={(event) => setInput(event.target.value)} rows={3} maxLength={1000} placeholder={activeField ? '继续补充，比如：不想走太远，想去有特色的书店…' : '例如：下午两点从武汉光谷广场出发，想喝咖啡散步，两个小时，步行…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
+          <div className="composer-footer"><p><kbd>Enter</kbd> 发送 <span>·</span> <kbd>Shift + Enter</kbd> 换行</p><button className="send-button" type="submit" disabled={busy || !input.trim()}>{collecting ? '正在处理…' : <>开始聊聊 <span>↑</span></>}</button></div>
+        </form>
+        {messages.length <= 1 && !activeField && <><div className="examples">{['下午两点从武汉光谷广场出发，想喝咖啡散步，两个小时，步行', '今晚想吃当地菜，顺便拍照，不想太累', '我在成都春熙路附近，三小时，打车也可以'].map((example, index) => <button key={example} type="button" disabled={busy} onClick={() => { setInput(example); document.getElementById('tripInput')?.focus(); }}>{['☕ 咖啡与城市漫步', '◒ 美食与夜色', '⌖ 随性探索新城市'][index]}</button>)}</div><button className="text-button manual-entry" disabled={busy} type="button" onClick={() => setMissingFields(missingPreference(draft))}>也可以直接选择出行条件 →</button></>}
+        {!collecting && steps.length > 0 && <details className="processing-record"><summary>查看刚才的处理记录</summary><ol>{steps.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol></details>}
+      </section>
+      <aside className="planner-sidebar"><PreferenceSummary preference={draft} onEdit={busy ? undefined : editField} /><section className="agent-guide"><p className="overline">从想法到出发</p><h2>一起完成这次小旅行</h2><ol><li><strong>理解你的想法</strong><p>确认出发点、可用时间和偏好。</p></li><li><strong>找到适合的路线</strong><p>筛选地点，比较不同体验和取舍。</p></li><li><strong>调整到刚刚好</strong><p>更换地点与顺序，再检查时间和路网。</p></li><li><strong>带上行程出发</strong><p>保存方案，分享一份清晰的行程。</p></li></ol><p className="guide-note">路线时长为规划估计。营业、预约和现场情况请在出发前确认。</p></section></aside>
+    </main>
   </div>;
 }
 
 function ClarificationCard({ field, selectedPlay, selectedTravel, fieldValue, setFieldValue, onToggle, onAnswer, disabled }: { field: RequiredField; selectedPlay: string[]; selectedTravel: TravelPreference[]; fieldValue: string; setFieldValue: (value: string) => void; onToggle: (field: 'playPreferences' | 'travelPreferences', value: string) => void; onAnswer: (patch: PreferenceExtraction, displayText: string) => void; disabled: boolean }) {
   const question = questions[field]; const submitText = field === 'originLabel' ? fieldValue.trim() : field === 'startTime' ? fieldValue : '';
-  const submit = (event: React.FormEvent) => { event.preventDefault(); if (submitText) void onAnswer({ [field]: submitText }, submitText); };
-  return <section className="clarify step-question" aria-labelledby="clarify-title"><div className="clarify-heading"><span className="avatar">T</span><div><p className="overline">需要确认 1 项</p><h2 id="clarify-title">{question.title}</h2><p>{question.description}</p></div></div>
-    {(field === 'originLabel' || field === 'startTime') && <form className="step-answer" onSubmit={submit}><input aria-label={question.title} autoFocus={field === 'originLabel'} type={field === 'startTime' ? 'time' : 'text'} value={fieldValue} onChange={(event) => setFieldValue(event.target.value)} placeholder={field === 'originLabel' ? '例如：武汉光谷广场' : undefined} /><button className="primary-button" type="submit" disabled={disabled || !submitText}>确认</button></form>}
-    {field === 'availableMinutes' && <div className="duration-options step-options">{DURATIONS.map((duration) => <button key={duration} type="button" disabled={disabled} onClick={() => void onAnswer({ availableMinutes: duration }, `${duration / 60} 小时`)}>{duration / 60} 小时</button>)}</div>}
-    {field === 'playPreferences' && <><div className="interest-options step-options">{PLAY_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" className={selectedPlay.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('playPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedPlay.length} onClick={() => void onAnswer({ playPreferences: selectedPlay }, selectedPlay.join('、'))}>确认偏好</button></>}
-    {field === 'travelPreferences' && <><div className="travel-options step-options">{TRAVEL_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" className={selectedTravel.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('travelPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedTravel.length} onClick={() => void onAnswer({ travelPreferences: selectedTravel }, selectedTravel.join('、'))}>确认出行方式</button></>}</section>;
+  const submit = (event: React.FormEvent) => { event.preventDefault(); if (submitText) onAnswer({ [field]: submitText }, `${field === 'originLabel' ? '从这里出发' : '出发时间'}：${submitText}`); };
+  return <section className="clarify step-question" aria-labelledby="clarify-title"><div className="clarify-heading"><span className="avatar">T</span><div><p className="overline">确认出行条件</p><h2 id="clarify-title">{question.title}</h2><p>{question.description}</p></div></div>
+    {(field === 'originLabel' || field === 'startTime') && <form className="step-answer" onSubmit={submit}><input aria-label={question.title} disabled={disabled} required maxLength={120} type={field === 'startTime' ? 'time' : 'text'} value={fieldValue} onChange={(event) => setFieldValue(event.target.value)} placeholder={field === 'originLabel' ? '例如：武汉光谷广场' : undefined} onKeyDown={(event) => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }} /><button className="primary-button" type="submit" disabled={disabled || !submitText}>确认{field === 'originLabel' ? '出发点' : '时间'}</button></form>}
+    {field === 'availableMinutes' && <div className="duration-options step-options">{DURATIONS.map((duration) => <button key={duration} type="button" disabled={disabled} onClick={() => onAnswer({ availableMinutes: duration }, `可用时间：${duration < 60 ? `${duration} 分钟` : `${duration / 60} 小时`}`)}>{duration < 60 ? `${duration} 分钟` : `${duration / 60} 小时`}</button>)}</div>}
+    {field === 'playPreferences' && <><div className="interest-options step-options">{[...new Set([...PLAY_PREFERENCE_OPTIONS, ...selectedPlay])].map((option) => <button key={option} type="button" aria-pressed={selectedPlay.includes(option)} className={selectedPlay.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('playPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedPlay.length} onClick={() => onAnswer({ playPreferences: selectedPlay }, `想体验：${selectedPlay.join('、')}`)}>确认游玩偏好</button></>}
+    {field === 'travelPreferences' && <><div className="travel-options step-options">{TRAVEL_PREFERENCE_OPTIONS.map((option) => <button key={option} type="button" aria-pressed={selectedTravel.includes(option)} className={selectedTravel.includes(option) ? 'is-selected' : ''} disabled={disabled} onClick={() => onToggle('travelPreferences', option)}>{option}</button>)}</div><button className="primary-button step-confirm" type="button" disabled={disabled || !selectedTravel.length} onClick={() => onAnswer({ travelPreferences: selectedTravel }, `出行方式：${selectedTravel.join('、')}`)}>确认出行方式</button></>}</section>;
 }
 
 export function App() { return <Routes><Route path="/" element={<HomePage />} /><Route path="/compare/:itineraryId" element={<ComparePage />} /><Route path="/editor/:itineraryId/:routeId" element={<EditorPage />} /><Route path="/share/:token" element={<SharePage />} /><Route path="*" element={<HomePage />} /></Routes>; }
-function ChatMessage({ children }: { children: ReactNode }) { return <div className="assistant-message"><span className="avatar">T</span><p>{children}</p></div>; }
+function ChatMessage({ children }: { children: ReactNode }) { return <div className="assistant-message"><span className="avatar" aria-hidden="true">T</span><p>{children}</p></div>; }
