@@ -14,7 +14,7 @@ type EditWithoutVersion = EditCommand extends infer Command ? Command extends Ed
 type Notice = { text: string; kind: 'success' | 'error' };
 
 function AppHeader() {
-  return <header className="app-header"><Link to="/" className="brand"><span className="brand-mark">↗</span>TripBeam<span className="brand-caption">城市旅行规划</span></Link><Link className="header-new-trip" to="/">规划一次出发 ↗</Link></header>;
+  return <header className="app-header"><Link to="/" className="brand" aria-label="TripBeam 城市旅行规划"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><circle cx="26" cy="12" r="6.5" fill="#f2c653"/><path d="M7 29.5c5.1 0 6.4-9.2 12-9.2s6.2 8.2 13.5 8.2" fill="none" stroke="#27866f" strokeWidth="3.4" strokeLinecap="round"/><circle cx="7" cy="29.5" r="2.8" fill="#e97849"/><circle cx="32.5" cy="28.5" r="2.8" fill="#4d91b8"/></svg></span><span className="brand-wordmark"><strong>Trip</strong>Beam</span><span className="brand-caption">城市旅行规划</span></Link><Link className="header-new-trip" to="/">规划一次出发 ↗</Link></header>;
 }
 function Metric({ label, value }: { label: string; value: string }) { return <div><small>{label}</small><strong>{value}</strong></div>; }
 function Loading({ text = '正在读取行程…' }: { text?: string }) { return <div className="app-shell"><AppHeader /><main className="state-page" role="status"><span className="loading-orbit" /><h1>{text}</h1><p>即将展示地点清单、路线安排和出行提示。</p></main></div>; }

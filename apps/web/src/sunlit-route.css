@@ -1,0 +1,183 @@
+/* 晴路：明亮纸白、晴日色彩与可辨认的街区线索。 */
+:root {
+  --sun-paper: #fffdf5;
+  --sun-canvas: #f5f7ee;
+  --sun-sky: #d9eff1;
+  --sun-water: #9dd3d4;
+  --sun-leaf: #27866f;
+  --sun-leaf-dark: #216b59;
+  --sun-citrus: #f2c653;
+  --sun-coral: #e97849;
+  --sun-blue: #4d91b8;
+  --sun-ink: #24483f;
+  --sun-muted: #657d73;
+  --sun-line: #d6e5d9;
+  --canvas: var(--sun-canvas);
+  --surface: var(--sun-paper);
+  --ink: var(--sun-ink);
+  --muted: var(--sun-muted);
+  --line: var(--sun-line);
+  --green: var(--sun-leaf);
+  --green-2: #51a18a;
+  --pale: #e4f1e8;
+  --paper-shadow: 0 12px 34px rgba(50, 105, 83, .075);
+}
+
+html { background: var(--sun-canvas); }
+body {
+  color: var(--sun-ink);
+  background: linear-gradient(180deg, #f2f7ee 0, #fffdf6 330px, #fffdf6 100%);
+}
+body:before { display: none; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible { outline-color: #27866f; }
+.page-shell, .app-shell { color: var(--sun-ink); }
+.topbar, .app-header { border-color: #dce9dd; }
+.brand { color: var(--sun-ink); }
+.brand { gap: 9px; }
+.brand-mark { display: grid; place-items: center; width: 37px; height: 37px; flex: 0 0 37px; color: #286e60; background: #fff2bf; border: 1px solid #efd885; box-shadow: none; border-radius: 50%; }
+.brand-mark svg { display: block; width: 31px; height: 31px; }
+.brand-wordmark { display: inline-flex; align-items: baseline; color: #245549; font-size: 18px; letter-spacing: -.045em; font-weight: 500; }
+.brand-wordmark strong { color: #247d68; font-weight: 760; }
+.brand-caption { margin-left: 3px; padding-left: 12px; border: 0; border-left: 1px solid #cfe0d4; border-radius: 0; letter-spacing: .04em; }
+.draft-state, .app-header>p, .brand-caption { color: #6b8277; }
+.header-new-trip, .back-link, .share-secondary-links a { color: var(--sun-leaf-dark); }
+.planner-journey li span { background: #fffdf6; }
+.planner-journey .current span { background: var(--sun-leaf); border-color: var(--sun-leaf); box-shadow: 0 0 0 4px rgba(39, 134, 111, .1); }
+.planner-journey .done span { background: #e2f0e4; border-color: #e2f0e4; }
+.eyebrow, .overline { color: #458573; }
+h1, .planner-main h1, .decision-header h1, .editor-top h1, .share-heading h1,
+.preference-summary-heading h2, .agent-guide h2, .section-heading h2 { color: var(--sun-ink); }
+
+/* 首屏像窗外的一段好天气：插画只占一小块，不挤压对话入口。 */
+.planner-layout { grid-template-columns: minmax(0, 1.08fr) minmax(310px, .78fr); gap: clamp(34px, 6vw, 82px); padding-top: 48px; align-items: start; }
+.planner-main:before { content: "出门前 · 一段刚刚好的城市漫游"; color: #738f80; font-size: 10px; letter-spacing: .08em; }
+.planner-main h1 { color: #225547; }
+.planner-main .intro { color: #5f796c; }
+.sunlit-scene { position: relative; overflow: hidden; margin: 23px 0 5px; border: 1px solid #d8e8dd; border-radius: 4px 18px 15px 15px; background: #dceff0; box-shadow: 0 8px 24px rgba(46, 114, 97, .06); }
+.sunlit-scene svg { display: block; width: 100%; height: clamp(126px, 17vw, 178px); }
+.sunlit-scene figcaption { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px 9px; color: #4f796c; background: #fffdf5; font-size: 10px; }
+.sunlit-scene figcaption span:first-child { color: #287966; font-weight: 700; }
+.planner-main .chat-log { margin-top: 22px; }
+.assistant-message p { background: #fffdf5; border-color: #dce9dd; box-shadow: none; }
+.user-message p { background: #e5f1e7; }
+.planner-main .composer { background: #fffef9; border-color: #cbded1; box-shadow: 0 8px 22px rgba(47, 96, 73, .05); }
+.planner-main .composer:focus-within { border-color: #66a18a; box-shadow: 0 0 0 3px rgba(39, 134, 111, .1); }
+.send-button, .primary-button { color: #fffdf5; background: var(--sun-leaf); box-shadow: none; }
+.send-button:hover, .primary-button:hover:not(:disabled) { background: var(--sun-leaf-dark); }
+.secondary-button { color: var(--sun-leaf-dark); background: #fffdf6; border-color: #c9ddcf; }
+.primary-button:disabled, .secondary-button:disabled, .send-button:disabled { color: #7c8c80; background: #edf1e8; border-color: #dfe7dc; box-shadow: none; opacity: 1; cursor: not-allowed; }
+.planner-main .examples button { background: #fffdf5; border-color: #d8e7dc; color: #547469; }
+.planner-sidebar { background: #eef5e9; border-color: #e2ecdf; box-shadow: none; backdrop-filter: none; }
+.planner-sidebar:before { display: none; }
+.preference-summary, .agent-guide, .clarify, .agent-actions, .editor-overview, .itinerary-list, .share-card, .state-page { backdrop-filter: none; }
+.preference-summary { background: #fffdf5; border-color: #dce8dc; box-shadow: 0 5px 16px rgba(48, 105, 82, .045); }
+.agent-guide { background: #fff7df; border-color: #eee1b9; }
+.agent-guide:after { opacity: .2; }
+.step-question { background: #fffdf5; box-shadow: none; }
+.step-options button { background: #fffdf6; }
+.step-options button.is-selected { background: #e5f1e7; color: #216b59; border-color: #75ad91; }
+.avatar { background: var(--sun-leaf); }
+
+/* 比较页把地图当作方向感，把彩色路线索引当作选择入口。 */
+.decision-page .compare-map-area .real-map { background: #d8eef0; border-color: #fffdf6; outline-color: #c8e0d8; box-shadow: 0 14px 34px rgba(45, 112, 96, .1); }
+.decision-page .map-legend button, .decision-page .map-fit-button { background: rgba(255, 253, 245, .96); }
+.route-board:before { color: #367966; border-color: #d7e6d8; }
+.route-card, .route-card:nth-child(2), .route-card:nth-child(3) { background: #fffdf6; }
+.route-card:hover, .route-card:nth-child(2):hover, .route-card:nth-child(3):hover { background: #fbfff7; }
+.route-card.is-active { background: #f7fbf2; }
+.route-focus { background: #edf4e5; }
+.matched-tags span { background: color-mix(in srgb, var(--route-color) 11%, #fffdf5); }
+.route-tradeoff { background: #f1f5e9; }
+.difference-matrix h2 { color: var(--sun-ink); }
+.route-comparison-table th, .route-comparison-table td { border-color: #dce8dc; }
+.map-data-note { color: #71877c; }
+.real-map, .leaflet-container { background-color: #d8eef0; }
+.leaflet-container { background-image: none; }
+.route-sketch { position: absolute; inset: 0; width: 100%; height: 100%; background: #eaf3e5; }
+.route-sketch .sketch-caption { fill: #688579; font: 600 13px "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+.route-sketch .sketch-route polyline { fill: none; stroke: currentColor; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; opacity: .42; }
+.route-sketch .sketch-route.is-active polyline { stroke-width: 8; opacity: .96; }
+.route-sketch .sketch-stop circle { fill: #fffdf5; stroke-width: 4; }
+.route-sketch .sketch-stop>text { fill: #24483f; font: 700 14px "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+.route-sketch .sketch-label rect { fill: #fffdf5; stroke: #d3e2d5; }
+.route-sketch .sketch-label text { fill: #24483f; }
+.route-sketch .sketch-origin circle { fill: #f2c653; stroke: #fffdf5; stroke-width: 4; }
+.route-sketch .sketch-origin text { fill: #24483f; }
+.map-unavailable { background: rgba(255, 253, 245, .93); color: #617c70; }
+
+/* 编辑时先看沿途停靠，再看整体方位；每站留出操作空间。 */
+.editor-overview { background: #fffdf5; box-shadow: 0 7px 22px rgba(47, 96, 73, .05); }
+.editor-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.itinerary-list { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0 12px; padding: 22px; border: 1px solid #dce8dc !important; border-radius: 4px 18px 15px 15px; background: #fffdf6; box-shadow: 0 7px 22px rgba(47, 96, 73, .05); }
+.itinerary-list:before { flex: 0 0 100%; color: #43836e; }
+.itinerary-list .section-heading, .itinerary-list .section-description, .itinerary-list .origin-line, .itinerary-list .alternative-picker { flex: 0 0 100%; }
+.origin-line { border-bottom: 1px dashed #cfe0d3; }
+.origin-symbol { background: #e9f3e4; color: var(--sun-leaf); }
+.timeline-stop { flex: 1 1 0; min-width: 250px; box-sizing: border-box; align-self: stretch; margin: 0 0 12px; padding: 13px 14px 12px; border: 1px solid #e2ebdc; border-radius: 4px 13px 11px 11px; background: #fbfcf5; }
+.leg-summary { color: #638277; }
+.timeline-stop .leg-summary { margin: 0 0 7px; padding: 0 0 8px; border-left: 0; border-bottom: 1px dashed #d5e3d4; }
+.stop-row { min-height: 92px; align-items: flex-start; }
+.stop-row .stop-select { flex-wrap: nowrap; }
+.stop-details { flex: 1; min-width: 0; }
+.stop-details strong, .stop-details small { display: block; overflow-wrap: anywhere; }
+.stop-inline-actions { margin-left: 38px; gap: 9px; }
+.stay-duration-field { white-space: nowrap; }
+.stop-actions { flex: 0 0 auto; }
+.stop-actions button { width: 30px; height: 30px; border-radius: 50%; }
+.stop-row.active { background: #edf5e8; }
+.stop-select .stop-number { border-color: #8eb9a0; color: #287966; background: #fffdf5; }
+.stop-row.active .stop-number { color: white; border-color: var(--sun-leaf); background: var(--sun-leaf); }
+.alternative-picker { margin-top: 16px; padding: 16px; border: 1px dashed #d5e3d4; border-radius: 4px 13px 12px 12px; background: #fbfcf3; }
+.editor-map { min-height: 360px; border: 1px solid #d8e6d9; border-radius: 4px 18px 15px 15px; box-shadow: 0 7px 22px rgba(47, 96, 73, .05); }
+.editor-map .real-map { min-height: 360px; background: #d8eef0; }
+.map-stop-caption { background: rgba(255, 253, 245, .95); color: var(--sun-ink); }
+.constraint-bar.valid { background: #e7f2e4; color: #34735b; }
+.constraint-bar.invalid { background: #fff0d8; }
+.editor-footer, .decision-footer { background: rgba(255, 253, 245, .97); border-color: #dce8dc; }
+
+/* 分享页像一张留有余白的出发票根。 */
+.share-heading { position: relative; padding: 23px 0 20px; }
+.share-stamp { background: #fff2bf; color: #be6b46; border-color: #eacb75; box-shadow: none; }
+.share-card { border: 1px solid #e5e4cc; background: #fffdf4; box-shadow: 0 12px 32px rgba(72, 95, 63, .07); }
+.share-card:before { border-color: #f1cf5e; }
+.share-card .real-map { background: #d9eef0; }
+.share-story { border-color: #e7e7d5; }
+.share-story h2 { color: #2e6b59; }
+.share-timeline li:not(:last-child):before { background: repeating-linear-gradient(180deg, #bfd7c8 0 4px, transparent 4px 8px); }
+.share-timeline li>span { background: #e5f1e7; color: var(--sun-leaf-dark); }
+.share-risk { background: #f7f2df; }
+.share-actions .primary-button { background: var(--sun-leaf); }
+.share-secondary-links a { text-decoration-color: #a9cabc; }
+.inline-alert { background: #fff2d8; color: #795d2f; }
+.state-page { background: #fffdf6; border-color: #dce8dc; box-shadow: var(--paper-shadow); }
+
+@media (min-width: 821px) {
+  .editor-map { grid-row: auto; }
+  .editor-map .real-map { min-height: 390px; }
+}
+@media (max-width: 820px) {
+  .sunlit-scene svg { height: 145px; }
+  .timeline-stop { min-width: 220px; }
+  .editor-map { grid-row: auto; }
+  .editor-map .real-map { min-height: 340px; }
+}
+@media (max-width: 640px) {
+  body { background: linear-gradient(180deg, #f1f7eb 0, #fffdf6 230px, #fffdf6 100%); }
+  .planner-layout { padding-top: 30px; }
+  .sunlit-scene { margin-top: 18px; }
+  .sunlit-scene svg { height: 122px; }
+  .sunlit-scene figcaption { font-size: 9px; }
+  .planner-sidebar { background: #f3f6e9; }
+  .decision-page .compare-map-area .real-map, .editor-map .real-map { background: #d8eef0; }
+  .editor-grid { display: flex; flex-direction: column; }
+  .itinerary-list { display: block; padding: 17px 14px; }
+  .timeline-stop { padding: 0 5px 8px; border-left: 0; }
+  .stop-row { min-height: 0; }
+  .editor-map { order: 2; min-height: 300px; }
+  .editor-map .real-map { min-height: 300px; }
+  .alternative-picker { margin-top: 12px; padding: 13px; }
+  .share-card { border-radius: 4px 17px 14px 13px; }
+  .brand-mark { width: 32px; height: 32px; flex-basis: 32px; }
+  .brand-mark svg { width: 28px; height: 28px; }
+  .brand-wordmark { font-size: 16px; }
+}
