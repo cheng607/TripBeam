@@ -2,10 +2,15 @@ import { z } from 'zod';
 
 export const PLAY_PREFERENCE_OPTIONS = ['当地美食', '拍照散步', '文化展览', '自然放松', '逛街购物', '夜生活'] as const;
 export const TRAVEL_PREFERENCE_OPTIONS = ['步行', '自行车', '公共交通', '打车', '自驾'] as const;
+const TripDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '请选择出行日期').refine((value) => {
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day!));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month! - 1 && date.getUTCDate() === day;
+}, '请选择有效的出行日期');
 
 export const PreferenceDraftSchema = z.object({
   originLabel: z.string().trim().min(1, '请填写出发点').max(120),
-  tripDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '请选择出行日期').optional(),
+  tripDate: TripDateSchema.optional(),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '请选择开始时间'),
   availableMinutes: z.number().int().min(30).max(240),
   playPreferences: z.array(z.string().trim().min(1).max(20)).min(1, '请选择至少一个游玩偏好').max(3),
@@ -28,7 +33,7 @@ export type PreferenceDraft = z.infer<typeof PreferenceDraftSchema>;
  */
 export const PreferenceExtractionSchema = z.object({
   originLabel: z.string().trim().min(1).max(120).optional(),
-  tripDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  tripDate: TripDateSchema.optional(),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   availableMinutes: z.number().int().min(30).max(240).optional(),
   playPreferences: z.array(z.string().trim().min(1).max(20)).max(3).optional(),
@@ -65,7 +70,7 @@ export const PreferenceValidationResponseSchema = z.object({
 
 export const ApiErrorSchema = z.object({
   requestId: z.string().uuid(),
-  code: z.enum(['VALIDATION_ERROR', 'LLM_UNAVAILABLE', 'LLM_INVALID_RESPONSE', 'INTERNAL_ERROR', 'MAP_NOT_CONFIGURED', 'LOCATION_NOT_FOUND', 'MAP_UNAVAILABLE', 'ROUTE_UNAVAILABLE', 'POI_INSUFFICIENT', 'CONSTRAINT_VIOLATION', 'NOT_FOUND', 'VERSION_CONFLICT', 'NOT_SAVED']),
+  code: z.enum(['VALIDATION_ERROR', 'LLM_UNAVAILABLE', 'LLM_INVALID_RESPONSE', 'INTERNAL_ERROR', 'MAP_NOT_CONFIGURED', 'LOCATION_NOT_FOUND', 'LOCATION_AMBIGUOUS', 'LOCATION_CITY_MISMATCH', 'MAP_UNAVAILABLE', 'ROUTE_UNAVAILABLE', 'POI_INSUFFICIENT', 'CONSTRAINT_VIOLATION', 'NOT_FOUND', 'VERSION_CONFLICT', 'NOT_SAVED']),
   message: z.string().min(1).max(240),
   details: z.array(z.object({ path: z.string(), message: z.string() }).strict()).max(20).optional(),
 }).strict();

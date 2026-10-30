@@ -111,6 +111,20 @@ describe('deterministic planning API', () => {
     );
     expect(route.scheduledStops[0]).toMatchObject({ arrivalTime: '14:06', departureTime: '14:31' });
     expect(route.legs.every((leg) => leg.plannedDepartureMinuteOffset !== undefined && leg.plannedArrivalMinuteOffset !== undefined)).toBe(true);
+    expect(route.risks).not.toContain('TRIP_DATE_ASSUMED');
+  });
+
+  it('enables night transit from each leg departure instead of only the trip start time', async () => {
+    const contexts: Array<{ departureTime: string; includeNightService: boolean }> = [];
+    const nightMap: MapProvider = {
+      ...map,
+      leg: async (from, to, mode, _city, context) => {
+        contexts.push({ departureTime: context!.departureTime, includeNightService: context!.includeNightService });
+        return { fromId: from.label, toId: to.label, mode, durationMinutes: 6, distanceMeters: 450, geometry: [from.coordinate, to.coordinate] };
+      },
+    };
+    await buildRoute({ origin, city: '成都', preference: { ...preference, startTime: '19:55', travelPreferences: ['公共交通'] }, pois: candidates.slice(0, 2), theme: 'balanced', title: '夜间换乘', map: nightMap });
+    expect(contexts.map((item) => item.includeNightService)).toEqual([false, true, true]);
   });
 
   it('does not claim to satisfy hard constraints without place-level evidence', async () => {

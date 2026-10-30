@@ -1,7 +1,7 @@
 import type { Coordinate, Place, Poi, RouteLeg, WeatherSummary } from '@tripbeam/contracts';
 
 export class MapProviderError extends Error {
-  constructor(message: string, public readonly code: 'MAP_NOT_CONFIGURED' | 'LOCATION_NOT_FOUND' | 'MAP_UNAVAILABLE' | 'ROUTE_UNAVAILABLE') {
+  constructor(message: string, public readonly code: 'MAP_NOT_CONFIGURED' | 'LOCATION_NOT_FOUND' | 'LOCATION_AMBIGUOUS' | 'LOCATION_CITY_MISMATCH' | 'MAP_UNAVAILABLE' | 'ROUTE_UNAVAILABLE') {
     super(message);
     this.name = 'MapProviderError';
   }
@@ -66,6 +66,9 @@ const finiteNumber = (value: unknown): number | undefined => {
   const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined;
 };
 const splitTags = (value: unknown): string[] => string(value).split(/[,，]/u).map((item) => item.trim()).filter(Boolean).slice(0, 8);
+const normalizedCity = (value: unknown): string => string(value).replace(/(?:特别行政区|自治区|省|市|地区|自治州|盟)$/u, '').trim();
+const cityName = (poi: JsonObject): string => normalizedCity(poi.cityname) || normalizedCity(poi.pname);
+const cityCode = (poi: JsonObject): string => string(poi.citycode) || string(poi.adcode);
 
 function gcjDelta({ lat, lng }: Coordinate): Coordinate {
   const x = lng - 105; const y = lat - 35;
@@ -144,12 +147,30 @@ export class AMapProvider implements MapProvider {
   }
 
   async resolve(text: string): Promise<{ place: Place; city: string }> {
-    const data = await this.get('/v3/place/text', { keywords: text, offset: '5', extensions: 'all', citylimit: 'true' });
-    const poi = list(data.pois).map(record).find((item) => parseCoordinate(item.location));
-    if (!poi) throw new MapProviderError('未找到出发地点，请输入更具体的地标或地址。', 'LOCATION_NOT_FOUND');
+    // A citylimit without its matching city/adcode does not limit a v3 POI
+    // search. First use a broad response only to identify an explicitly named
+    // city, then repeat the lookup with a strict city constraint.
+    const discovery = await this.get('/v3/place/text', { keywords: text, offset: '20', extensions: 'all' });
+    const discovered = list(discovery.pois).map(record).filter((item) => parseCoordinate(item.location));
+    if (!discovered.length) throw new MapProviderError('未找到出发地点，请输入更具体的地标或地址。', 'LOCATION_NOT_FOUND');
+    const requestedCity = discovered.find((item) => {
+      const city = cityName(item);
+      return city.length >= 2 && text.includes(city);
+    });
+    if (!requestedCity) {
+      const cities = [...new Set(discovered.map(cityName).filter(Boolean))].slice(0, 4);
+      const hint = cities.length ? `可选城市包括：${cities.join('、')}。` : '';
+      throw new MapProviderError(`“${text}”缺少可确认的城市信息。请使用“城市 + 地标”重新输入，例如“上海人民广场”。${hint}`, 'LOCATION_AMBIGUOUS');
+    }
+    const requestedCityName = cityName(requestedCity);
+    const requestedCityCode = cityCode(requestedCity);
+    const data = await this.get('/v3/place/text', {
+      keywords: text, offset: '10', extensions: 'all', city: requestedCityCode || requestedCityName, citylimit: 'true',
+    });
+    const poi = list(data.pois).map(record).find((item) => parseCoordinate(item.location) && cityName(item) === requestedCityName);
+    if (!poi) throw new MapProviderError(`未能在${requestedCityName}找到“${text}”。请确认城市和地标名称后重试。`, 'LOCATION_CITY_MISMATCH');
     const coordinate = parseCoordinate(poi.location)!;
-    const cityValue = poi.cityname;
-    return { place: { label: string(poi.name) || text, address: string(poi.address) || text, coordinate: gcjToWgs(coordinate), providerId: string(poi.id) || undefined }, city: string(cityValue) || '中国' };
+    return { place: { label: string(poi.name) || text, address: string(poi.address) || text, coordinate: gcjToWgs(coordinate), providerId: string(poi.id) || undefined }, city: requestedCityName };
   }
 
   async nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]> {

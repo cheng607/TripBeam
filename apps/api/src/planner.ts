@@ -144,7 +144,6 @@ export async function buildRoute(input: {
   if (!preference.travelPreferences.includes(mode)) throw new PlannerError('出行方式不在用户偏好中。', 'CONSTRAINT_VIOLATION');
   const tripDate = preference.tripDate ?? chinaToday();
   const assumedTripDate = !preference.tripDate;
-  const startHour = Number(preference.startTime.slice(0, 2));
   const transitStrategy = preference.mobilityPolicy === 'hard' || preference.party === 'senior' || preference.party === 'wheelchair' ? 'least_walking' as const : 'fastest' as const;
   let elapsed = 0;
   const legs: RouteLeg[] = [];
@@ -154,7 +153,7 @@ export async function buildRoute(input: {
     const requestedDeparture = departureAt(tripDate, preference.startTime, elapsed);
     const rawLeg = await map.leg(from, poi.place, mode, city, {
       departureDate: requestedDeparture.date, departureTime: requestedDeparture.time, departureMinuteOffset: elapsed,
-      transitStrategy, includeNightService: startHour >= 20 || startHour < 6,
+      transitStrategy, includeNightService: requestedDeparture.time >= '20:00' || requestedDeparture.time < '06:00',
     });
     const departureMinuteOffset = elapsed;
     elapsed += rawLeg.durationMinutes;
@@ -171,7 +170,7 @@ export async function buildRoute(input: {
   const returnDeparture = departureAt(tripDate, preference.startTime, returnDepartureMinuteOffset);
   const rawReturnLeg = await map.leg(lastPoi.place, origin, mode, city, {
     departureDate: returnDeparture.date, departureTime: returnDeparture.time, departureMinuteOffset: returnDepartureMinuteOffset,
-    transitStrategy, includeNightService: startHour >= 20 || startHour < 6,
+    transitStrategy, includeNightService: returnDeparture.time >= '20:00' || returnDeparture.time < '06:00',
   });
   elapsed += rawReturnLeg.durationMinutes;
   legs.push({ ...rawReturnLeg, fromId: lastPoi.id, toId: 'origin', plannedDepartureMinuteOffset: returnDepartureMinuteOffset, plannedArrivalMinuteOffset: elapsed });
@@ -199,7 +198,7 @@ export async function buildRoute(input: {
       // guarantee. The schedule carries the requested time into the provider
       // boundary, but must remain explicit about this data limitation.
       'TRAFFIC_TIME_UNCERTAIN' as const,
-      ...(assumedTripDate ? ['TRIP_DATE_ASSUMED' as const] : []),
+      ...(assumedTripDate && legs.some((leg) => leg.mode === '公共交通') ? ['TRIP_DATE_ASSUMED' as const] : []),
       ...(hasUnverifiedPreference(preference) ? ['PREFERENCE_UNVERIFIED' as const] : []),
       ...(pois.some((poi) => poi.place.address === '地址待确认') ? ['POI_DATA_PARTIAL' as const] : []),
       ...(remainingMinutes < 20 ? ['ROUTE_TIME_TIGHT' as const] : []),

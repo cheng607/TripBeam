@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { EditCommandSchema, PreferenceDraftSchema, RouteSchema } from './index.js';
 
 describe('public API contracts', () => {
+  it('rejects calendar-invalid trip dates', () => {
+    expect(PreferenceDraftSchema.safeParse({
+      originLabel: '成都春熙路', tripDate: '2026-02-30', startTime: '14:00', availableMinutes: 120,
+      playPreferences: ['当地美食'], travelPreferences: ['步行'],
+    }).success).toBe(false);
+  });
+
   it('rejects model-owned route fields in user preferences', () => {
     const preference = {
       originLabel: '春熙路', startTime: '14:00', availableMinutes: 120,

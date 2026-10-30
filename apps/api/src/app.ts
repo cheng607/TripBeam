@@ -265,7 +265,7 @@ function validationError(requestId: string, issues: Array<{ path: PropertyKey[];
 }
 function sendError(reply: { code: (status: number) => { send: (data: ApiError) => unknown } }, requestId: string, error: unknown) {
   if (error instanceof WorkflowError) return reply.code(error.status).send(apiError(requestId, error.status === 409 ? 'VERSION_CONFLICT' : 'VALIDATION_ERROR', error.message));
-  if (error instanceof MapProviderError) return reply.code(error.code === 'LOCATION_NOT_FOUND' ? 422 : 503).send(apiError(requestId, error.code, error.message));
+  if (error instanceof MapProviderError) return reply.code(['LOCATION_NOT_FOUND', 'LOCATION_AMBIGUOUS', 'LOCATION_CITY_MISMATCH'].includes(error.code) ? 422 : 503).send(apiError(requestId, error.code, error.message));
   if (error instanceof PlannerError) return reply.code(422).send(apiError(requestId, error.code, error.message));
   return reply.code(500).send(apiError(requestId, 'INTERNAL_ERROR', '服务暂时不可用，请稍后重试。'));
 }
