@@ -1,4 +1,4 @@
-import type { Coordinate, Place, Poi, RouteLeg } from '@tripbeam/contracts';
+import type { Coordinate, Place, Poi, RouteLeg, WeatherSummary } from '@tripbeam/contracts';
 
 export class MapProviderError extends Error {
   constructor(message: string, public readonly code: 'MAP_NOT_CONFIGURED' | 'LOCATION_NOT_FOUND' | 'MAP_UNAVAILABLE' | 'ROUTE_UNAVAILABLE') {
@@ -10,7 +10,8 @@ export class MapProviderError extends Error {
 export interface MapProvider {
   resolve(text: string): Promise<{ place: Place; city: string }>;
   nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]>;
-  leg(from: Place, to: Place, mode: RouteLeg['mode'], city: string): Promise<RouteLeg>;
+  leg(from: Place, to: Place, mode: RouteLeg['mode'], city: string, context?: { departureDate: string; departureTime: string; departureMinuteOffset: number; transitStrategy: 'fastest' | 'least_walking'; includeNightService: boolean }): Promise<RouteLeg>;
+  weather?(city: string): Promise<WeatherSummary | undefined>;
 }
 
 /** Local-only deterministic provider for UI/MVP development when AMap is unreachable. */
@@ -60,6 +61,11 @@ const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const string = (value: unknown): string => typeof value === 'string' ? value : '';
 const number = (value: unknown): number => Number(value);
 const first = (value: unknown): JsonObject => record(list(value)[0]);
+const bool = (value: unknown): boolean | undefined => value === '1' || value === 1 || value === true ? true : value === '0' || value === 0 || value === false ? false : undefined;
+const finiteNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined;
+};
+const splitTags = (value: unknown): string[] => string(value).split(/[,，]/u).map((item) => item.trim()).filter(Boolean).slice(0, 8);
 
 function gcjDelta({ lat, lng }: Coordinate): Coordinate {
   const x = lng - 105; const y = lat - 35;
@@ -138,12 +144,12 @@ export class AMapProvider implements MapProvider {
   }
 
   async resolve(text: string): Promise<{ place: Place; city: string }> {
-    const data = await this.get('/v3/place/text', { keywords: text, offset: '5', extensions: 'base' });
+    const data = await this.get('/v3/place/text', { keywords: text, offset: '5', extensions: 'all', citylimit: 'true' });
     const poi = list(data.pois).map(record).find((item) => parseCoordinate(item.location));
     if (!poi) throw new MapProviderError('未找到出发地点，请输入更具体的地标或地址。', 'LOCATION_NOT_FOUND');
     const coordinate = parseCoordinate(poi.location)!;
     const cityValue = poi.cityname;
-    return { place: { label: string(poi.name) || text, address: string(poi.address) || text, coordinate: gcjToWgs(coordinate) }, city: string(cityValue) || '中国' };
+    return { place: { label: string(poi.name) || text, address: string(poi.address) || text, coordinate: gcjToWgs(coordinate), providerId: string(poi.id) || undefined }, city: string(cityValue) || '中国' };
   }
 
   async nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]> {
@@ -151,7 +157,7 @@ export class AMapProvider implements MapProvider {
     if (!queries.some((item) => item.category === '景点')) queries.push({ preference: '拍照散步', ...themeQueries.拍照散步! });
     const radiusMeters = Math.max(1_000, Math.min(50_000, Math.round(options?.radiusMeters ?? 12_000)));
     const responses = await Promise.all(queries.map(async (item) => ({ item, data: await this.get('/v3/place/around', {
-      location: queryCoordinate(origin.coordinate), keywords: item.query, radius: String(radiusMeters), offset: '20', sortrule: 'weight', extensions: 'base',
+      location: queryCoordinate(origin.coordinate), keywords: item.query, radius: String(radiusMeters), offset: '20', sortrule: 'weight', extensions: 'all',
     }) })));
     const found = new Map<string, Poi>();
     for (const { item, data } of responses) for (const raw of list(data.pois)) {
@@ -160,29 +166,64 @@ export class AMapProvider implements MapProvider {
       const existing = found.get(id);
       if (existing) { if (!existing.tags.includes(item.preference)) existing.tags.push(item.preference); continue; }
       const name = string(poi.name);
+      const detail = record(poi.biz_ext);
+      const providerTags = splitTags(poi.tag);
+      const rating = finiteNumber(detail.rating);
+      const averageCost = finiteNumber(detail.cost);
       found.set(id, { id, name, category: item.category, tags: [item.preference],
-        place: { label: string(poi.name), address: string(poi.address) || string(poi.pname) || '地址待确认', coordinate: gcjToWgs(coordinate) },
-        stayMinutes: item.stay, placeKind: classifyPlaceKind(name, item.category) });
+        place: { label: string(poi.name), address: string(poi.address) || string(poi.pname) || '地址待确认', coordinate: gcjToWgs(coordinate), providerId: id },
+        stayMinutes: item.stay, placeKind: classifyPlaceKind(name, item.category),
+        metadata: {
+          provider: 'amap', categoryPath: string(poi.type) || undefined, typeCode: string(poi.typecode) || undefined,
+          cuisineTags: providerTags.length ? providerTags : undefined, rating: rating !== undefined && rating >= 0 && rating <= 5 ? rating : undefined,
+          averageCost: averageCost !== undefined && averageCost >= 0 ? averageCost : undefined, hasIndoorMap: bool(poi.indoor_map),
+          supportsMealOrdering: bool(detail.meal_ordering), supportsTicketOrdering: bool(detail.ticket_ordering), fetchedAt: new Date().toISOString(),
+        },
+      });
     }
     return [...found.values()];
   }
 
-  async leg(from: Place, to: Place, mode: RouteLeg['mode'], city: string): Promise<RouteLeg> {
+  async weather(city: string): Promise<WeatherSummary | undefined> {
+    const data = await this.get('/v3/weather/weatherInfo', { city, extensions: 'base' });
+    const live = first(data.lives);
+    const condition = string(live.weather);
+    if (!condition) return undefined;
+    const temperature = finiteNumber(live.temperature);
+    const humidity = finiteNumber(live.humidity);
+    return {
+      city: string(live.city) || city, condition, temperatureCelsius: temperature,
+      windDirection: string(live.winddirection) || undefined, windPower: string(live.windpower) || undefined,
+      humidity: humidity !== undefined && Number.isInteger(humidity) && humidity >= 0 && humidity <= 100 ? humidity : undefined,
+      reportedAt: string(live.reporttime) || new Date().toISOString(), source: 'amap',
+    };
+  }
+
+  async leg(from: Place, to: Place, mode: RouteLeg['mode'], city: string, context?: { departureDate: string; departureTime: string; departureMinuteOffset: number; transitStrategy: 'fastest' | 'least_walking'; includeNightService: boolean }): Promise<RouteLeg> {
     const query = { origin: queryCoordinate(from.coordinate), destination: queryCoordinate(to.coordinate) };
-    let data: JsonObject; let path: JsonObject; let steps: JsonObject[] = []; let duration = 0; let distance = 0;
+    let data: JsonObject; let path: JsonObject; let steps: JsonObject[] = []; let duration = 0; let distance = 0; let walkingDistanceMeters = 0; let transitTransferCount = 0;
     if (mode === '自行车') {
       data = await this.get('/v4/direction/bicycling', query);
       path = first(record(data.data).paths); steps = list(path.steps).map(record);
     } else if (mode === '公共交通') {
-      data = await this.get('/v3/direction/transit/integrated', { ...query, city });
+      data = await this.get('/v3/direction/transit/integrated', {
+        ...query, city, extensions: 'all',
+        ...(context ? { date: context.departureDate, time: context.departureTime, strategy: context.transitStrategy === 'least_walking' ? '3' : '0', nightflag: context.includeNightService ? '1' : '0' } : {}),
+      });
       path = first(record(data.route).transits);
       const segments = list(path.segments).map(record);
       for (const segment of segments) {
         steps.push(...list(record(segment.walking).steps).map(record));
-        steps.push(...list(record(segment.bus).buslines).map(record));
+        const busLines = list(record(segment.bus).buslines).map(record);
+        steps.push(...busLines);
+        if (busLines.length) transitTransferCount += busLines.length;
       }
+      walkingDistanceMeters = Math.max(0, Math.round(finiteNumber(path.walking_distance) ?? 0));
     } else {
-      data = await this.get(mode === '步行' ? '/v3/direction/walking' : '/v3/direction/driving', query);
+      const poiIds = mode === '步行'
+        ? { ...(from.providerId ? { origin_id: from.providerId } : {}), ...(to.providerId ? { destination_id: to.providerId } : {}) }
+        : { ...(from.providerId ? { originid: from.providerId } : {}), ...(to.providerId ? { destinationid: to.providerId } : {}), extensions: 'all', strategy: '10' };
+      data = await this.get(mode === '步行' ? '/v3/direction/walking' : '/v3/direction/driving', { ...query, ...poiIds });
       path = first(record(data.route).paths); steps = list(path.steps).map(record);
     }
     duration = number(path.duration); distance = number(path.distance);
@@ -190,9 +231,12 @@ export class AMapProvider implements MapProvider {
     if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(distance) || distance < 0 || geometry.length < 2) {
       throw new MapProviderError('该出行方式暂时无法获得可靠的路网线路。', 'ROUTE_UNAVAILABLE');
     }
+    const normalizedDistance = Math.round(distance);
     return {
       fromId: from.label, toId: to.label, mode, durationMinutes: Math.max(1, Math.ceil(duration / 60)),
-      distanceMeters: Math.round(distance), geometry: geometry.slice(0, 3000),
+      distanceMeters: normalizedDistance, geometry: geometry.slice(0, 3000),
+      walkingDistanceMeters: mode === '步行' ? normalizedDistance : walkingDistanceMeters,
+      transitTransferCount: mode === '公共交通' ? Math.max(0, transitTransferCount - 1) : 0,
     };
   }
 }

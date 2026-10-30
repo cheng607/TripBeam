@@ -1,6 +1,6 @@
 import type { EditCommand, NaturalEdit, Poi, TripRoute, InvalidDraft } from '@tripbeam/contracts';
 import { buildRoute, PlannerError } from './planner.js';
-import type { MapProvider } from './maps.js';
+import { MapProviderError, type MapProvider } from './maps.js';
 import type { PlanStore, StoredPlan } from './store.js';
 
 export class WorkflowError extends Error {
@@ -52,6 +52,31 @@ export async function editRoute(store: PlanStore, map: MapProvider, id: string, 
   } }));
   if (!result || result === 'conflict') throw new WorkflowError('版本已更新，请刷新后重试。', 409);
   return result;
+}
+
+/**
+ * Candidate choices are preflighted against the current sequence before the UI
+ * offers them. This prevents presenting a nearby POI that cannot fit the
+ * verified route time budget once its real inbound and return legs are known.
+ */
+export async function feasibleAlternatives(plan: StoredPlan, routeId: string, map: MapProvider, replacePoiId?: string): Promise<Poi[]> {
+  const route = plan.itinerary.routes.find((item) => item.id === routeId);
+  if (!route) throw new WorkflowError('路线不存在。', 404);
+  const used = new Set(route.pois.map((poi) => poi.id));
+  const candidates = plan.candidates.filter((poi) => !used.has(poi.id) && poi.placeKind !== 'area').slice(0, 8);
+  const replacementIndex = replacePoiId ? route.pois.findIndex((poi) => poi.id === replacePoiId) : -1;
+  if (replacePoiId && replacementIndex < 0) throw new WorkflowError('要替换的地点不在当前路线中。');
+  const checks = await Promise.all(candidates.map(async (candidate) => {
+    const pois = replacementIndex < 0 ? [...route.pois, candidate] : route.pois.map((poi, index) => index === replacementIndex ? candidate : poi);
+    try {
+      await buildRoute({ origin: plan.itinerary.origin, city: plan.city, preference: plan.itinerary.preference, pois, theme: route.theme, title: route.title, mode: route.legs[0]!.mode, map });
+      return candidate;
+    } catch (error) {
+      if (error instanceof PlannerError || error instanceof MapProviderError) return undefined;
+      throw error;
+    }
+  }));
+  return checks.filter((candidate): candidate is Poi => Boolean(candidate));
 }
 
 export async function restoreRoute(store: PlanStore, id: string, baseVersion: number, routeId?: string) {

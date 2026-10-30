@@ -96,6 +96,48 @@ describe('deterministic planning API', () => {
     await app.close();
   });
 
+  it('closes the route with a return leg and keeps buffer separate from remaining time', async () => {
+    const route = await buildRoute({ origin, city: '成都', preference, pois: candidates.slice(0, 2), theme: 'balanced', title: '闭环路线', map });
+    expect(route.returnsToOrigin).toBe(true);
+    expect(route.endPlace).toEqual(origin);
+    expect(route.legs).toHaveLength(route.pois.length + 1);
+    expect(route.legs.at(-1)).toMatchObject({ fromId: route.pois.at(-1)!.id, toId: 'origin' });
+    expect(route.bufferMinutes).toBe(10);
+    expect(route.remainingMinutes).toBe(preference.availableMinutes - route.totalDurationMinutes);
+    expect(route.totalDurationMinutes).toBe(
+      route.legs.reduce((sum, leg) => sum + leg.durationMinutes, 0)
+      + route.pois.reduce((sum, poi) => sum + poi.stayMinutes, 0)
+      + route.bufferMinutes,
+    );
+    expect(route.scheduledStops[0]).toMatchObject({ arrivalTime: '14:06', departureTime: '14:31' });
+    expect(route.legs.every((leg) => leg.plannedDepartureMinuteOffset !== undefined && leg.plannedArrivalMinuteOffset !== undefined)).toBe(true);
+  });
+
+  it('does not claim to satisfy hard constraints without place-level evidence', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);
+    const app = createApp({ map, store: new FilePlanStore(join(folder, 'plans.json')) });
+    const response = await app.inject({ method: 'POST', url: '/v1/itineraries/generate', payload: { ...preference, mustHave: ['无障碍'] } });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: 'CONSTRAINT_VIOLATION' });
+    expect(response.json().message).toContain('没有可验证满足');
+    await app.close();
+  });
+
+  it('returns AMap weather with a generated itinerary and preflights replacement choices', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);
+    const weatherMap: MapProvider = { ...map, weather: async () => ({ city: '成都', condition: '多云', temperatureCelsius: 22, reportedAt: '2026-10-31 14:00:00', source: 'amap' }) };
+    const app = createApp({ map: weatherMap, store: new FilePlanStore(join(folder, 'plans.json')) });
+    const generated = await app.inject({ method: 'POST', url: '/v1/itineraries/generate', payload: preference });
+    expect(generated.statusCode).toBe(201);
+    const trip = GenerateResponseSchema.parse(generated.json()).itinerary;
+    expect(trip.weather).toMatchObject({ city: '成都', condition: '多云', temperatureCelsius: 22 });
+    const route = trip.routes[0]!;
+    const alternatives = await app.inject({ method: 'GET', url: `/v1/itineraries/${trip.id}/routes/${route.id}/alternatives?replacePoiId=${route.pois[0]!.id}` });
+    expect(alternatives.statusCode).toBe(200);
+    expect(alternatives.json().alternatives.every((poi: Poi) => !route.pois.some((used) => used.id === poi.id))).toBe(true);
+    await app.close();
+  });
+
   it('rejects a plan when it cannot offer two concrete, distinct routes', async () => {
     const limitedCandidates: Poi[] = [
       { ...candidates[0]!, id: 'venue-only', placeKind: 'venue' },

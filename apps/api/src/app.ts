@@ -11,7 +11,7 @@ import { FilePlanStore, type PlanStore } from './store.js';
 import { PostgresPlanStore } from './pg-store.js';
 import { DifyWorkflowAgent, NativeAgentOrchestrator, type AgentOrchestrator } from './agent.js';
 import { FileSessionStore, MemorySessionStore, PgSessionStore, authorized, newSession, type SessionRecord, type SessionStore } from './session-store.js';
-import { editRoute, resolveNaturalEdit, restoreRoute, WorkflowError } from './route-service.js';
+import { editRoute, feasibleAlternatives, resolveNaturalEdit, restoreRoute, WorkflowError } from './route-service.js';
 
 const fields = ['originLabel', 'startTime', 'availableMinutes', 'playPreferences', 'travelPreferences'] as const;
 const idParams = z.object({ id: z.string().uuid() });
@@ -47,6 +47,20 @@ export function createApp(options: AppOptions = {}) {
   const sessionStore: SessionStore = options.sessionStore ?? (process.env.DATABASE_URL
     ? new PgSessionStore(process.env.DATABASE_URL)
     : new FileSessionStore(process.env.TRIPBEAM_SESSION_FILE || fileURLToPath(new URL('../data/sessions.json', import.meta.url))));
+  const configuredRetentionDays = Number(process.env.TRIPBEAM_DRAFT_TTL_DAYS ?? 30);
+  const retentionDays = Number.isFinite(configuredRetentionDays) && configuredRetentionDays > 0 ? configuredRetentionDays : 30;
+  const cleanupExpiredData = async () => {
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    await sessionStore.deleteExpired(cutoff);
+    await store.deleteExpiredDrafts(cutoff);
+  };
+  let cleanupTimer: NodeJS.Timeout | undefined;
+  app.addHook('onReady', async () => {
+    await cleanupExpiredData();
+    cleanupTimer = setInterval(() => { void cleanupExpiredData().catch((error) => app.log.error(error, 'retention cleanup failed')); }, 6 * 60 * 60 * 1000);
+    cleanupTimer.unref();
+  });
+  app.addHook('onClose', async () => { if (cleanupTimer) clearInterval(cleanupTimer); });
   if (!options.store && store instanceof PostgresPlanStore) app.addHook('onClose', async () => { await store.close(); });
   if (!options.sessionStore && sessionStore instanceof PgSessionStore) app.addHook('onClose', async () => { await sessionStore.close?.(); });
   const allowedOrigins = (process.env.WEB_ORIGIN?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? ['http://127.0.0.1:4173', 'http://localhost:4173']);
@@ -90,11 +104,23 @@ export function createApp(options: AppOptions = {}) {
     const created = newSession(); await sessionStore.put(created.record);
     return reply.code(201).send({ requestId: request.id, token: created.token, session: created.record.session });
   });
+  app.delete('/v1/sessions/:id', async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send(validationError(request.id, params.error.issues));
+    return inSessionOrder(params.data.id, async () => {
+      const record = await sessionStore.get(params.data.id);
+      if (!authorized(record, String(request.headers['x-session-token'] ?? '')) || !record) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '会话不存在或令牌无效。'));
+      await store.deleteDraftsByOwner(record.session.id);
+      await sessionStore.delete(record.session.id);
+      return reply.send({ requestId: request.id, deleted: true });
+    });
+  });
   app.get('/v1/sessions/:id', async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send(validationError(request.id, params.error.issues));
     const record = await sessionStore.get(params.data.id);
     if (!authorized(record, String(request.headers['x-session-token'] ?? '')) || !record) return reply.code(401).send(apiError(request.id, 'NOT_FOUND', '会话不存在或令牌无效。'));
+    await sessionStore.put(record);
     return reply.send({ requestId: request.id, session: SessionSchema.parse(record.session) });
   });
   app.post('/v1/sessions/:id/turns', async (request, reply) => {
@@ -108,7 +134,7 @@ export function createApp(options: AppOptions = {}) {
       if (!record) return reply.code(404).send(apiError(request.id, 'NOT_FOUND', '会话不存在。'));
       const fingerprint = JSON.stringify(body.data);
       const previous = record.turns[body.data.turnId];
-      if (previous?.fingerprint === fingerprint) return reply.send(previous.result);
+      if (previous?.fingerprint === fingerprint) { await sessionStore.put(record); return reply.send(previous.result); }
       if (previous) return reply.code(409).send(apiError(request.id, 'VERSION_CONFLICT', '同一轮请求不能使用不同内容，请重新发送。'));
       try {
         const result = await handleTurn(record, body.data, { agent, nativeAgent, map, store, requestId: request.id });
@@ -184,11 +210,13 @@ export function createApp(options: AppOptions = {}) {
   app.get('/v1/itineraries/:id/routes/:routeId/alternatives', async (request, reply) => {
     const parsed = routeParams.safeParse(request.params);
     if (!parsed.success) return reply.code(400).send(validationError(request.id, parsed.error.issues));
+    const query = z.object({ replacePoiId: z.string().min(1).optional() }).strict().safeParse(request.query);
+    if (!query.success) return reply.code(400).send(validationError(request.id, query.error.issues));
     const plan = await store.getPlan(parsed.data.id);
     const route = plan?.itinerary.routes.find((item) => item.id === parsed.data.routeId);
     if (!plan || !route) return reply.code(404).send(apiError(request.id, 'NOT_FOUND', '路线不存在。'));
-    const used = new Set(route.pois.map((poi) => poi.id));
-    return reply.send({ requestId: request.id, alternatives: plan.candidates.filter((poi) => !used.has(poi.id) && poi.placeKind !== 'area').slice(0, 20) });
+    try { return reply.send({ requestId: request.id, alternatives: await feasibleAlternatives(plan, route.id, map, query.data.replacePoiId) }); }
+    catch (error) { return sendError(reply, request.id, error); }
   });
   app.post('/v1/itineraries/:id/routes/:routeId/edits', async (request, reply) => {
     const parsed = routeParams.safeParse(request.params); const command = EditCommandSchema.safeParse(request.body);

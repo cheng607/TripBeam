@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import type { Itinerary, Poi, ShareSnapshot } from '@tripbeam/contracts';
 import { ItinerarySchema, ShareSnapshotSchema } from '@tripbeam/contracts';
 
-export type StoredPlan = { itinerary: Itinerary; candidates: Poi[]; city: string; ownerSessionId?: string };
+export type StoredPlan = { itinerary: Itinerary; candidates: Poi[]; city: string; ownerSessionId?: string; updatedAt?: string; savedAt?: string };
 type FileData = { plans: Record<string, StoredPlan>; shares: Record<string, ShareSnapshot> };
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -13,6 +13,8 @@ export interface PlanStore {
   getPlan(id: string): Promise<StoredPlan | null>;
   updatePlan(id: string, baseVersion: number, change: (plan: StoredPlan) => StoredPlan): Promise<StoredPlan | 'conflict' | null>;
   save(id: string, baseVersion: number): Promise<StoredPlan | 'conflict' | null>;
+  deleteDraftsByOwner(ownerSessionId: string): Promise<void>;
+  deleteExpiredDrafts(cutoff: string): Promise<void>;
   share(id: string, routeId: string): Promise<ShareSnapshot | null>;
   getShare(token: string): Promise<ShareSnapshot | null>;
   healthCheck?(): Promise<void>;
@@ -31,7 +33,7 @@ export class FilePlanStore implements PlanStore {
       const data = JSON.parse(await readFile(this.path, 'utf8')) as FileData;
       for (const [id, plan] of Object.entries(data.plans ?? {})) {
         const parsed = ItinerarySchema.safeParse(plan.itinerary);
-        if (parsed.success) this.data.plans[id] = { ...plan, itinerary: parsed.data };
+        if (parsed.success) this.data.plans[id] = { ...plan, itinerary: parsed.data, savedAt: plan.savedAt ?? (parsed.data.savedVersion === parsed.data.version ? parsed.data.generatedAt : undefined) };
       }
       for (const [token, snapshot] of Object.entries(data.shares ?? {})) {
         const parsed = ShareSnapshotSchema.safeParse(snapshot);
@@ -57,7 +59,7 @@ export class FilePlanStore implements PlanStore {
   }
 
   async putPlan(plan: StoredPlan) {
-    await this.mutate(() => { this.data.plans[plan.itinerary.id] = clone(plan); });
+    await this.mutate(() => { this.data.plans[plan.itinerary.id] = clone({ ...plan, updatedAt: new Date().toISOString() }); });
   }
   async getPlan(id: string) { await this.ready; await this.writeChain; return this.data.plans[id] ? clone(this.data.plans[id]) : null; }
   async updatePlan(id: string, baseVersion: number, change: (plan: StoredPlan) => StoredPlan) {
@@ -67,6 +69,7 @@ export class FilePlanStore implements PlanStore {
       if (current.itinerary.version !== baseVersion) return 'conflict' as const;
       const updated = change(clone(current));
       updated.itinerary = ItinerarySchema.parse(updated.itinerary);
+      updated.updatedAt = new Date().toISOString();
       this.data.plans[id] = clone(updated);
       return clone(updated);
     });
@@ -78,7 +81,25 @@ export class FilePlanStore implements PlanStore {
       if (current.itinerary.version !== baseVersion) return 'conflict' as const;
       if (current.itinerary.invalidDraft || current.itinerary.routes.some((route) => route.constraintStatus !== 'valid')) return 'conflict' as const;
       current.itinerary.savedVersion = current.itinerary.version;
+      current.updatedAt = new Date().toISOString();
+      current.savedAt = current.updatedAt;
       return clone(current);
+    });
+  }
+  async deleteDraftsByOwner(ownerSessionId: string) {
+    await this.mutate(() => {
+      const sharedIds = new Set(Object.values(this.data.shares).map((share) => share.itineraryId));
+      for (const [id, plan] of Object.entries(this.data.plans))
+        if (plan.ownerSessionId === ownerSessionId && !plan.savedAt && plan.itinerary.savedVersion !== plan.itinerary.version && !sharedIds.has(id)) delete this.data.plans[id];
+    });
+  }
+  async deleteExpiredDrafts(cutoff: string) {
+    await this.mutate(() => {
+      const sharedIds = new Set(Object.values(this.data.shares).map((share) => share.itineraryId));
+      for (const [id, plan] of Object.entries(this.data.plans)) {
+        const lastTouched = plan.updatedAt ?? plan.itinerary.generatedAt;
+        if (!plan.savedAt && plan.itinerary.savedVersion !== plan.itinerary.version && lastTouched < cutoff && !sharedIds.has(id)) delete this.data.plans[id];
+      }
     });
   }
   async share(id: string, routeId: string) {

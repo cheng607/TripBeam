@@ -47,5 +47,6 @@ export const clockTime = (start: string, offset: number) => {
 
 export const riskLabel: Record<string, string> = {
   OPENING_HOURS_UNCERTAIN: '营业时间待确认', MAP_UNAVAILABLE: '地图暂不可用', POI_DATA_PARTIAL: '地点信息待确认',
+  TRAFFIC_TIME_UNCERTAIN: '该时段交通耗时待确认', TRIP_DATE_ASSUMED: '未指定日期，已按今天查询公共交通', PREFERENCE_UNVERIFIED: '部分自由偏好尚未取得地点级验证',
   ROUTE_TIME_TIGHT: '时间余量较少', PREFERENCE_RELAXED: '已放宽部分偏好', ROUTE_COUNT_LIMITED: '可用路线数量有限',
 };

@@ -36,7 +36,8 @@ export class PostgresPlanStore implements PlanStore {
 
   private parsePlan(value: unknown): StoredPlan {
     const source = value as StoredPlan;
-    return { ...source, itinerary: ItinerarySchema.parse(source.itinerary) };
+    const itinerary = ItinerarySchema.parse(source.itinerary);
+    return { ...source, itinerary, savedAt: source.savedAt ?? (itinerary.savedVersion === itinerary.version ? itinerary.generatedAt : undefined) };
   }
 
   private async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -55,7 +56,7 @@ export class PostgresPlanStore implements PlanStore {
 
   async putPlan(plan: StoredPlan) {
     await this.ready;
-    const parsed = this.parsePlan(plan);
+    const parsed = this.parsePlan({ ...plan, updatedAt: new Date().toISOString() });
     await this.pool.query('INSERT INTO tripbeam_plans(id, version, payload) VALUES ($1, $2, $3::jsonb)', [parsed.itinerary.id, parsed.itinerary.version, JSON.stringify(parsed)]);
   }
 
@@ -73,6 +74,7 @@ export class PostgresPlanStore implements PlanStore {
       if (row.version !== baseVersion) return 'conflict';
       const updated = this.parsePlan(change(this.parsePlan(row.payload)));
       if (updated.itinerary.version !== baseVersion + 1) throw new Error('Version must increment exactly once');
+      updated.updatedAt = new Date().toISOString();
       await client.query('UPDATE tripbeam_plans SET version = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [id, updated.itinerary.version, JSON.stringify(updated)]);
       return updated;
     });
@@ -87,9 +89,21 @@ export class PostgresPlanStore implements PlanStore {
       const plan = this.parsePlan(row.payload);
       if (plan.itinerary.invalidDraft || plan.itinerary.routes.some((route) => route.constraintStatus !== 'valid')) return 'conflict';
       plan.itinerary.savedVersion = baseVersion;
+      plan.updatedAt = new Date().toISOString();
+      plan.savedAt = plan.updatedAt;
       await client.query('UPDATE tripbeam_plans SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [id, JSON.stringify(plan)]);
       return plan;
     });
+  }
+
+  async deleteDraftsByOwner(ownerSessionId: string) {
+    await this.ready;
+    await this.pool.query(`DELETE FROM tripbeam_plans p WHERE p.payload->>'ownerSessionId' = $1 AND p.payload->>'savedAt' IS NULL AND p.payload->'itinerary'->>'savedVersion' IS DISTINCT FROM p.payload->'itinerary'->>'version' AND NOT EXISTS (SELECT 1 FROM tripbeam_shares s WHERE s.itinerary_id = p.id)`, [ownerSessionId]);
+  }
+
+  async deleteExpiredDrafts(cutoff: string) {
+    await this.ready;
+    await this.pool.query(`DELETE FROM tripbeam_plans p WHERE p.updated_at < $1 AND p.payload->>'savedAt' IS NULL AND p.payload->'itinerary'->>'savedVersion' IS DISTINCT FROM p.payload->'itinerary'->>'version' AND NOT EXISTS (SELECT 1 FROM tripbeam_shares s WHERE s.itinerary_id = p.id)`, [cutoff]);
   }
 
   async share(id: string, routeId: string): Promise<ShareSnapshot | null> {

@@ -5,6 +5,7 @@ export const TRAVEL_PREFERENCE_OPTIONS = ['步行', '自行车', '公共交通',
 
 export const PreferenceDraftSchema = z.object({
   originLabel: z.string().trim().min(1, '请填写出发点').max(120),
+  tripDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '请选择出行日期').optional(),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '请选择开始时间'),
   availableMinutes: z.number().int().min(30).max(240),
   playPreferences: z.array(z.string().trim().min(1).max(20)).min(1, '请选择至少一个游玩偏好').max(3),
@@ -27,6 +28,7 @@ export type PreferenceDraft = z.infer<typeof PreferenceDraftSchema>;
  */
 export const PreferenceExtractionSchema = z.object({
   originLabel: z.string().trim().min(1).max(120).optional(),
+  tripDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   availableMinutes: z.number().int().min(30).max(240).optional(),
   playPreferences: z.array(z.string().trim().min(1).max(20)).max(3).optional(),
@@ -75,7 +77,12 @@ export type PreferenceValidationResponse = z.infer<typeof PreferenceValidationRe
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 
 export const CoordinateSchema = z.object({ lat: z.number().finite().min(-90).max(90), lng: z.number().finite().min(-180).max(180) }).strict();
-export const PlaceSchema = z.object({ label: z.string().min(1).max(160), address: z.string().max(240), coordinate: CoordinateSchema }).strict();
+export const PlaceSchema = z.object({ label: z.string().min(1).max(160), address: z.string().max(240), coordinate: CoordinateSchema, providerId: z.string().min(1).max(160).optional() }).strict();
+export const PoiMetadataSchema = z.object({
+  provider: z.literal('amap'), categoryPath: z.string().min(1).max(180).optional(), typeCode: z.string().min(1).max(30).optional(),
+  cuisineTags: z.array(z.string().min(1).max(60)).max(8).optional(), rating: z.number().finite().min(0).max(5).optional(), averageCost: z.number().finite().nonnegative().max(100_000).optional(),
+  hasIndoorMap: z.boolean().optional(), supportsMealOrdering: z.boolean().optional(), supportsTicketOrdering: z.boolean().optional(), fetchedAt: z.string().datetime(),
+}).strict();
 export const PoiSchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(160), category: z.string().min(1).max(40),
   tags: z.array(z.string().min(1).max(30)).max(8), place: PlaceSchema,
@@ -85,6 +92,7 @@ export const PoiSchema = z.object({
   // A place can be a short connector (viewpoint, historic facade, market stall),
   // so it must not be excluded merely because it is not a 10-minute destination.
   stayMinutes: z.number().int().min(1).max(180),
+  metadata: PoiMetadataSchema.optional(),
 }).strict();
 export const PoiInsightSchema = z.object({
   poiId: z.string().min(1),
@@ -93,22 +101,38 @@ export const PoiInsightSchema = z.object({
   risks: z.array(z.string().min(1).max(160)).max(5),
   confidence: z.enum(['high', 'medium', 'low']),
 }).strict();
+export const WeatherSummarySchema = z.object({
+  city: z.string().min(1).max(80), condition: z.string().min(1).max(40), temperatureCelsius: z.number().finite().min(-80).max(80).optional(),
+  windDirection: z.string().min(1).max(40).optional(), windPower: z.string().min(1).max(40).optional(), humidity: z.number().int().min(0).max(100).optional(), reportedAt: z.string().min(1).max(80), source: z.literal('amap'),
+}).strict();
 export const RouteLegSchema = z.object({
   fromId: z.string().min(1), toId: z.string().min(1), mode: z.enum(TRAVEL_PREFERENCE_OPTIONS),
   durationMinutes: z.number().int().min(1).max(120), distanceMeters: z.number().int().min(0).max(20000),
   geometry: z.array(CoordinateSchema).min(2).max(3000),
+  // Set by the planner after each provider lookup. These fields make the
+  // provider's relative duration auditable against the itinerary timeline.
+  plannedDepartureMinuteOffset: z.number().int().min(0).max(300).optional(),
+  plannedArrivalMinuteOffset: z.number().int().min(0).max(300).optional(),
+  walkingDistanceMeters: z.number().int().min(0).max(20000).optional(), transitTransferCount: z.number().int().min(0).max(20).optional(),
 }).strict();
 export const ScheduledStopSchema = z.object({
   poiId: z.string().min(1), arrivalMinuteOffset: z.number().int().min(0).max(240),
   departureMinuteOffset: z.number().int().min(0).max(240),
+  arrivalTime: z.string().min(5).max(12).optional(), departureTime: z.string().min(5).max(12).optional(),
 }).strict();
-export const RiskCodeSchema = z.enum(['OPENING_HOURS_UNCERTAIN', 'MAP_UNAVAILABLE', 'POI_DATA_PARTIAL', 'ROUTE_TIME_TIGHT', 'PREFERENCE_RELAXED', 'ROUTE_COUNT_LIMITED']);
+export const RiskCodeSchema = z.enum(['OPENING_HOURS_UNCERTAIN', 'TRAFFIC_TIME_UNCERTAIN', 'TRIP_DATE_ASSUMED', 'PREFERENCE_UNVERIFIED', 'MAP_UNAVAILABLE', 'POI_DATA_PARTIAL', 'ROUTE_TIME_TIGHT', 'PREFERENCE_RELAXED', 'ROUTE_COUNT_LIMITED']);
 export const RouteSchema = z.object({
   id: z.string().uuid(), theme: z.enum(['food_first', 'photo_first', 'easy_walk', 'balanced']),
-  title: z.string().min(1).max(80), pois: z.array(PoiSchema).min(1).max(8), legs: z.array(RouteLegSchema).min(1).max(8),
+  title: z.string().min(1).max(80), pois: z.array(PoiSchema).min(1).max(8), legs: z.array(RouteLegSchema).min(2).max(9),
   scheduledStops: z.array(ScheduledStopSchema).min(1).max(8),
   totalDurationMinutes: z.number().int().min(1).max(240), totalDistanceMeters: z.number().int().min(0).max(50000),
-  bufferMinutes: z.number().int().min(0).max(240), walkingIntensity: z.enum(['low', 'medium', 'high']),
+  // A route is closed: it always includes the final leg back to this endpoint.
+  // Optional while persisted pre-v3 itineraries are read. All newly generated
+  // routes populate these fields.
+  endPlace: PlaceSchema.optional(), returnsToOrigin: z.boolean().optional(), endArrivalMinuteOffset: z.number().int().min(0).max(240).optional(), endArrivalTime: z.string().min(5).max(12).optional(),
+  // Buffer and unallocated time are separate values. They must never be
+  // substituted for one another in UI or downstream consumers.
+  bufferMinutes: z.number().int().min(0).max(240), walkingIntensity: z.enum(['low', 'medium', 'high']), totalWalkingDistanceMeters: z.number().int().min(0).max(50000).optional(),
   remainingMinutes: z.number().int().min(0).max(240).optional(),
   constraintStatus: z.literal('valid'), recommendationReason: z.string().min(1).max(500),
   experienceStory: z.string().min(1).max(180).optional(),
@@ -124,7 +148,7 @@ export const InvalidDraftSchema = z.object({
   totalDistanceMeters: z.number().nonnegative().optional(),
 }).strict();
 export const ItinerarySchema = z.object({
-  id: z.string().uuid(), version: z.number().int().min(1), preference: PreferenceDraftSchema,
+  id: z.string().uuid(), version: z.number().int().min(1), preference: PreferenceDraftSchema, weather: WeatherSummarySchema.optional(),
   origin: PlaceSchema, routes: z.array(RouteSchema).min(1).max(3), status: z.enum(['complete', 'degraded']),
   generatedAt: z.string().datetime(), policyVersion: z.string().min(1), savedVersion: z.number().int().min(1).nullable(),
   invalidDraft: InvalidDraftSchema.optional(),
@@ -143,6 +167,7 @@ export type Coordinate = z.infer<typeof CoordinateSchema>;
 export type Place = z.infer<typeof PlaceSchema>;
 export type Poi = z.infer<typeof PoiSchema>;
 export type PoiInsight = z.infer<typeof PoiInsightSchema>;
+export type WeatherSummary = z.infer<typeof WeatherSummarySchema>;
 export type RouteLeg = z.infer<typeof RouteLegSchema>;
 export type TripRoute = z.infer<typeof RouteSchema>;
 export type Itinerary = z.infer<typeof ItinerarySchema>;

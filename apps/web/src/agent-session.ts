@@ -1,6 +1,6 @@
 import { SessionSchema, type AgentSession } from '@tripbeam/contracts';
 import { z } from 'zod';
-import { ApiRequestError, createSession, getSession, sendSessionTurn } from './api/trips';
+import { ApiRequestError, createSession, deleteSession, getSession, sendSessionTurn } from './api/trips';
 
 const STORAGE_KEY = 'tripbeam-agent-session-v1';
 const StoredSessionSchema = z.object({ token: z.string().min(20), session: SessionSchema });
@@ -32,6 +32,15 @@ export function forgetAgentSession() {
   connection = undefined;
   initialized = false;
   try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
+}
+
+export async function deleteAgentSession() {
+  const current = readCachedAgentSession();
+  try {
+    if (current) await deleteSession(current.session.id, current.token);
+  } finally {
+    forgetAgentSession();
+  }
 }
 
 // One connection promise prevents StrictMode, page mounts and the first submit
