@@ -82,6 +82,9 @@ h1, .planner-main h1, .decision-header h1, .editor-top h1, .share-heading h1,
 .decision-page .compare-map-area .real-map { background: #d8eef0; border-color: #fffdf6; outline-color: #c8e0d8; box-shadow: 0 14px 34px rgba(45, 112, 96, .1); }
 .decision-page .map-legend button, .decision-page .map-fit-button { background: rgba(255, 253, 245, .96); }
 .route-board:before { color: #367966; border-color: #d7e6d8; }
+.decision-page .route-board { grid-template-columns: minmax(0, 1fr); }
+.decision-page .route-board::before,
+.decision-page .route-board > .route-card { grid-column: 1 / -1; }
 .route-card, .route-card:nth-child(2), .route-card:nth-child(3) { background: #fffdf6; }
 .route-card:hover, .route-card:nth-child(2):hover, .route-card:nth-child(3):hover { background: #fbfff7; }
 .route-card.is-active { background: #f7fbf2; }

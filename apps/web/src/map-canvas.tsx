@@ -13,7 +13,7 @@ function tooltipText(value: string): HTMLElement {
   return element;
 }
 
-function RouteSketch({ origin, routes, activeRouteId }: { origin: Place; routes: TripRoute[]; activeRouteId: string }) {
+function RouteSketch({ origin, routes, activeRouteId, routeColorOffset }: { origin: Place; routes: TripRoute[]; activeRouteId: string; routeColorOffset: number }) {
   const points = [origin.coordinate, ...routes.flatMap((route) => [
     ...route.legs.flatMap((leg) => leg.geometry),
     ...route.pois.map((poi) => poi.place.coordinate),
@@ -38,7 +38,7 @@ function RouteSketch({ origin, routes, activeRouteId }: { origin: Place; routes:
     <text x="36" y="38" className="sketch-caption">路线示意 · 根据线路与地点位置绘制</text>
     {routes.map((route, routeIndex) => {
       const active = route.id === activeRouteId;
-      const color = routeColor(routeIndex);
+      const color = routeColor(routeIndex + routeColorOffset);
       return <g key={route.id} className={active ? 'sketch-route is-active' : 'sketch-route'} style={{ color }}>
         {route.legs.map((leg, legIndex) => {
           const legPoints = leg.geometry.map(project);
@@ -61,7 +61,7 @@ function RouteSketch({ origin, routes, activeRouteId }: { origin: Place; routes:
   </svg>;
 }
 
-export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute }: { origin: Place; routes: TripRoute[]; activeRouteId: string; activeStopIndex?: number; onSelectStop?: (index: number) => void; onSelectRoute?: (id: string) => void }) {
+export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute, routeColorOffset = 0 }: { origin: Place; routes: TripRoute[]; activeRouteId: string; activeStopIndex?: number; onSelectStop?: (index: number) => void; onSelectRoute?: (id: string) => void; routeColorOffset?: number }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const allRouteBounds = useRef<L.LatLngBounds | null>(null);
@@ -94,7 +94,7 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
       .sort((a, b) => Number(a.route.id === activeRouteId) - Number(b.route.id === activeRouteId))
       .forEach(({ route, routeIndex }) => {
       const active = route.id === activeRouteId;
-      const color = routeColor(routeIndex);
+      const color = routeColor(routeIndex + routeColorOffset);
       for (const leg of route.legs) {
         const points = leg.geometry.map((coordinate) => { const point = displayCoordinate(coordinate); return [point.lat, point.lng] as L.LatLngTuple; });
         if (points.length < 2) continue;
@@ -129,8 +129,8 @@ export function MapCanvas({ origin, routes, activeRouteId, activeStopIndex, onSe
       lastFittedShape.current = shape;
     }
     return () => { group.remove(); };
-  }, [origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute, fitMaxZoom, fitPadding]);
+  }, [origin, routes, activeRouteId, activeStopIndex, onSelectStop, onSelectRoute, routeColorOffset, fitMaxZoom, fitPadding]);
 
   const hasGeometry = routes.some((route) => route.legs.some((leg) => leg.geometry.length >= 2));
-  return <div className={`real-map${tileFailed && hasGeometry ? ' has-route-sketch' : ''}`} aria-label="真实路网地图"><div ref={element} className="leaflet-host" />{tileFailed && hasGeometry && <RouteSketch origin={origin} routes={routes} activeRouteId={activeRouteId} />}{(!hasGeometry || tileFailed) && <div className="map-unavailable">{tileFailed && hasGeometry ? '街道底图暂不可用；上方为路线示意。' : tileFailed ? '底图暂不可用；路线与地点清单仍可使用。' : '线路几何暂不可用，请查看地点清单。'}</div>}<div className="map-legend" aria-label="地图线路图例">{routes.map((route, index) => onSelectRoute ? <button type="button" className={route.id === activeRouteId ? 'active' : ''} aria-pressed={route.id === activeRouteId} key={route.id} onClick={() => onSelectRoute(route.id)}><i style={{ background: routeColor(index) }} />方案 {String.fromCharCode(65 + index)} · {route.title}</button> : <span className={route.id === activeRouteId ? 'active' : ''} key={route.id}><i style={{ background: routeColor(index) }} />方案 {String.fromCharCode(65 + index)} · {route.title}</span>)}</div>{routes.length > 1 && <button className="map-fit-button" type="button" onClick={() => { if (allRouteBounds.current) map.current?.fitBounds(allRouteBounds.current.pad(fitPadding), { maxZoom: fitMaxZoom }); }}>查看全部线路</button>}</div>;
+  return <div className={`real-map${tileFailed && hasGeometry ? ' has-route-sketch' : ''}`} aria-label="真实路网地图"><div ref={element} className="leaflet-host" />{tileFailed && hasGeometry && <RouteSketch origin={origin} routes={routes} activeRouteId={activeRouteId} routeColorOffset={routeColorOffset} />}{(!hasGeometry || tileFailed) && <div className="map-unavailable">{tileFailed && hasGeometry ? '街道底图暂不可用；上方为路线示意。' : tileFailed ? '底图暂不可用；路线与地点清单仍可使用。' : '线路几何暂不可用，请查看地点清单。'}</div>}<div className="map-legend" aria-label="地图线路图例">{routes.map((route, index) => onSelectRoute ? <button type="button" className={route.id === activeRouteId ? 'active' : ''} aria-pressed={route.id === activeRouteId} key={route.id} onClick={() => onSelectRoute(route.id)}><i style={{ background: routeColor(index + routeColorOffset) }} />方案 {String.fromCharCode(65 + index + routeColorOffset)} · {route.title}</button> : <span className={route.id === activeRouteId ? 'active' : ''} key={route.id}><i style={{ background: routeColor(index + routeColorOffset) }} />方案 {String.fromCharCode(65 + index + routeColorOffset)} · {route.title}</span>)}</div>{routes.length > 1 && <button className="map-fit-button" type="button" onClick={() => { if (allRouteBounds.current) map.current?.fitBounds(allRouteBounds.current.pad(fitPadding), { maxZoom: fitMaxZoom }); }}>查看全部线路</button>}</div>;
 }
