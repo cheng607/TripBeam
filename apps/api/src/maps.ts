@@ -1,6 +1,7 @@
-import type { Coordinate, Place, Poi, RouteLeg, WeatherSummary } from '@tripbeam/contracts';
+import type { Coordinate, Place, PlanningDiagnostics, Poi, RouteLeg, WeatherSummary } from '@tripbeam/contracts';
 
 export class MapProviderError extends Error {
+  diagnostics?: PlanningDiagnostics;
   constructor(message: string, public readonly code: 'MAP_NOT_CONFIGURED' | 'LOCATION_NOT_FOUND' | 'LOCATION_AMBIGUOUS' | 'LOCATION_CITY_MISMATCH' | 'MAP_UNAVAILABLE' | 'ROUTE_UNAVAILABLE') {
     super(message);
     this.name = 'MapProviderError';

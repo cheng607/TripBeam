@@ -91,6 +91,26 @@ describe('Agent conversation and recovery', () => {
     expect(retried.itinerary?.preference).toEqual(preference);
   });
 
+  it('returns safe diagnostics when route candidates are rejected by the time budget', async () => {
+    const slowMap: MapProvider = {
+      ...map,
+      leg: async (from, to, mode) => ({ fromId: from.label, toId: to.label, mode, durationMinutes: 75, distanceMeters: 2_000, geometry: [from.coordinate, to.coordinate] }),
+    };
+    const { turn } = await setup(slowMap);
+    const result = TurnResultSchema.parse((await turn({ action: 'confirm_preferences', preferencePatch: preference })).json());
+    expect(result.session.phase).toBe('no_route');
+    expect(result.warnings).toEqual(['ROUTE_UNAVAILABLE']);
+    expect(result.planningDiagnostics).toMatchObject({
+      finalReason: 'INSUFFICIENT_DISTINCT_VALID_ROUTES',
+      city: '成都',
+      counts: { rawPois: candidates.length, concretePois: candidates.length, validRoutes: 0 },
+    });
+    expect(result.planningDiagnostics?.plannerRunId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(result.planningDiagnostics?.counts.routeAttempts).toBeGreaterThan(0);
+    expect(result.planningDiagnostics?.rejections).toContainEqual(expect.objectContaining({ reason: 'TIME_BUDGET_EXCEEDED' }));
+    expect(result.message).toContain('主要淘汰原因：包含返程后超出可用时长');
+  });
+
   it('accepts a full regeneration patch on a fresh session and rejects turn-id reuse with changed content', async () => {
     const { turn } = await setup();
     const turnId = randomUUID();

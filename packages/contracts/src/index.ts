@@ -204,11 +204,37 @@ export const SessionSchema = z.object({
   itineraryIds: z.array(z.string().uuid()), itineraryId: z.string().uuid().optional(), routeId: z.string().uuid().optional(),
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string(), createdAt: z.string() }).strict()),
 }).strict();
+export const PlannerRejectionReasonSchema = z.enum([
+  'DUPLICATE_SEQUENCE',
+  'ROUTE_TOO_SIMILAR',
+  'TIME_BUDGET_EXCEEDED',
+  'ROUTE_LEG_UNAVAILABLE',
+  'ROUTE_CONSTRAINT_VIOLATION',
+  'MAP_PROVIDER_UNAVAILABLE',
+]);
+export const PlanningDiagnosticsSchema = z.object({
+  plannerRunId: z.string().uuid(),
+  city: z.string().min(1).max(80).optional(),
+  finalReason: z.enum(['COMPLETED', 'POI_INSUFFICIENT', 'INSUFFICIENT_DISTINCT_VALID_ROUTES', 'MAP_PROVIDER_UNAVAILABLE']),
+  counts: z.object({
+    rawPois: z.number().int().nonnegative(),
+    concretePois: z.number().int().nonnegative(),
+    candidateSequences: z.number().int().nonnegative(),
+    routeAttempts: z.number().int().nonnegative(),
+    validRoutes: z.number().int().nonnegative(),
+  }).strict(),
+  rejections: z.array(z.object({
+    reason: PlannerRejectionReasonSchema,
+    count: z.number().int().positive(),
+  }).strict()).max(6),
+  summary: z.string().min(1).max(240),
+}).strict();
 export const TurnResultSchema = z.object({
   requestId: z.string().uuid(), session: SessionSchema,
   intent: AgentIntentSchema, source: z.enum(['dify', 'native', 'fallback', 'form']),
   message: z.string(), missingFields: z.array(z.string()), fieldsToAsk: z.array(z.string()).max(3),
   warnings: z.array(z.string()), steps: z.array(z.string()),
+  planningDiagnostics: PlanningDiagnosticsSchema.optional(),
   itinerary: ItinerarySchema.optional(),
   actions: z.array(z.enum(['confirm_preferences', 'adjust_preferences', 'retry', 'restore', 'auto_trim', 'edit', 'compare'])),
 }).strict();
@@ -217,3 +243,4 @@ export type NaturalEdit = z.infer<typeof NaturalEditSchema>;
 export type AgentSession = z.infer<typeof SessionSchema>;
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 export type TurnResult = z.infer<typeof TurnResultSchema>;
+export type PlanningDiagnostics = z.infer<typeof PlanningDiagnosticsSchema>;

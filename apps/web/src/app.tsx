@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
-import { PLAY_PREFERENCE_OPTIONS, TRAVEL_PREFERENCE_OPTIONS, PreferenceExtractionSchema, type AgentSession, type PreferenceExtraction, type TurnResult } from '@tripbeam/contracts';
+import { PLAY_PREFERENCE_OPTIONS, TRAVEL_PREFERENCE_OPTIONS, PreferenceExtractionSchema, type AgentSession, type PlanningDiagnostics, type PreferenceExtraction, type TurnResult } from '@tripbeam/contracts';
 import { ComparePage, EditorPage, SharePage } from './pages';
 import { PlannerJourney, PreferenceSummary } from './planner-ui';
 import { deleteAgentSession, ensureAgentSession, forgetAgentSession, readCachedAgentSession, sendAgentTurn, sessionMessages, type AgentTurn } from './agent-session';
@@ -16,6 +16,14 @@ const questions: Record<RequiredField, { title: string; description: string }> =
   travelPreferences: { title: '愿意怎样出行？', description: '可多选。我们会用这些方式的路网数据检查时间和距离。' },
 };
 const requiredFields = Object.keys(questions) as RequiredField[];
+const rejectionLabel: Record<PlanningDiagnostics['rejections'][number]['reason'], string> = {
+  DUPLICATE_SEQUENCE: '候选地点重复',
+  ROUTE_TOO_SIMILAR: '与已有路线过于相似',
+  TIME_BUDGET_EXCEEDED: '包含返程后超出可用时长',
+  ROUTE_LEG_UNAVAILABLE: '地图未返回可靠线路',
+  ROUTE_CONSTRAINT_VIOLATION: '未通过路线约束',
+  MAP_PROVIDER_UNAVAILABLE: '地图服务暂不可用',
+};
 function missingPreference(preference: PreferenceExtraction): RequiredField[] {
   return requiredFields.filter((field) => { const value = preference[field]; return value === undefined || (Array.isArray(value) && value.length === 0); });
 }
@@ -36,6 +44,7 @@ function HomePage() {
   const [collecting, setCollecting] = useState(false);
   const [restoring, setRestoring] = useState(Boolean(initial.current));
   const [notice, setNotice] = useState('');
+  const [planningDiagnostics, setPlanningDiagnostics] = useState<PlanningDiagnostics>();
   const [failedTurn, setFailedTurn] = useState<AgentTurn>();
   const [steps, setSteps] = useState<string[]>([]);
   const [elapsed, setElapsed] = useState(0);
@@ -67,6 +76,7 @@ function HomePage() {
   function applyTurn(result: TurnResult) {
     setSession(result.session); setDraft(result.session.preference); setMessages(sessionMessages(result.session));
     setMissingFields(result.missingFields.filter((field): field is RequiredField => field in questions)); setEditingField(undefined); setSteps(result.steps);
+    setPlanningDiagnostics(result.planningDiagnostics);
     if (result.source === 'fallback') setNotice('智能理解暂不可用，已用规则继续处理。你也可以点选条件完成规划。');
     if (result.itinerary) navigate(`/compare/${result.itinerary.id}`);
   }
@@ -103,7 +113,7 @@ function HomePage() {
     setRestoring(true);
     let cleanupFailed = false;
     try { await deleteAgentSession(); } catch { cleanupFailed = true; forgetAgentSession(); }
-    setSession(undefined); setDraft({}); setMessages(sessionMessages()); setMissingFields([]); setEditingField(undefined); setInput(''); setSteps([]); setFailedTurn(undefined);
+    setSession(undefined); setDraft({}); setMessages(sessionMessages()); setMissingFields([]); setEditingField(undefined); setInput(''); setSteps([]); setFailedTurn(undefined); setPlanningDiagnostics(undefined);
     setNotice(cleanupFailed ? '已开始新规划，但旧会话暂时无法从服务器删除，将在无活动时自动清理。' : '已清除上一段对话及未保存路线。');
     setRestoring(false);
   };
@@ -119,6 +129,17 @@ function HomePage() {
         {collecting && <div className="planning-status" role="status"><span className="loading-orbit" /><div><strong>正在理解需求与检查规划条件{elapsed > 0 ? ` · ${elapsed} 秒` : ''}</strong><p>{elapsed >= 15 ? '地点和路网查询需要一些时间，请保持页面打开。' : '信息不足时会继续补问，条件完整后会查找地点并编排行程。'}</p></div></div>}
         {activeField && <ClarificationCard field={activeField} tripDate={draft.tripDate} onTripDateChange={(tripDate) => setDraft((state) => ({ ...state, tripDate: tripDate || undefined }))} selectedPlay={draft.playPreferences ?? []} selectedTravel={draft.travelPreferences ?? []} selectedCustom={draft.customPreferences ?? []} onCustomChange={(customPreferences) => setDraft((state) => ({ ...state, customPreferences }))} fieldValue={fieldValue} setFieldValue={setFieldValue} onToggle={toggle} onAnswer={answerField} disabled={busy} />}
         {notice && <div className="inline-alert home-notice" role="status"><p>{notice}</p>{failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn(failedTurn, true)}>重试这次请求</button>}</div>}
+        {planningDiagnostics && ['no_route', 'error'].includes(session?.phase ?? '') && <details className="planner-diagnostics">
+          <summary>查看本次规划诊断</summary>
+          <p>{planningDiagnostics.summary}</p>
+          <dl>
+            <div><dt>规划运行</dt><dd>{planningDiagnostics.plannerRunId}</dd></div>
+            <div><dt>候选地点</dt><dd>{planningDiagnostics.counts.concretePois} 个</dd></div>
+            <div><dt>实际算路</dt><dd>{planningDiagnostics.counts.routeAttempts} 条</dd></div>
+            <div><dt>有效方案</dt><dd>{planningDiagnostics.counts.validRoutes} 条</dd></div>
+          </dl>
+          {planningDiagnostics.rejections.length > 0 && <ul>{planningDiagnostics.rejections.map((item) => <li key={item.reason}>{rejectionLabel[item.reason]}：{item.count} 条</li>)}</ul>}
+        </details>}
         {session && ['no_route', 'error'].includes(session.phase) && !failedTurn && <button className="secondary-button" type="button" disabled={busy} onClick={() => void submitTurn({ turnId: crypto.randomUUID(), text: '按已确认的条件重新规划', action: 'regenerate', preferencePatch: draft })}>按这些条件重新尝试</button>}
         <form className="composer" onSubmit={(event) => { event.preventDefault(); sendText(input); }}>
           <label className="sr-only" htmlFor="tripInput">描述你的出行想法</label><textarea id="tripInput" value={input} disabled={busy} onChange={(event) => setInput(event.target.value)} rows={3} maxLength={1000} placeholder={activeField ? '继续补充，比如：不想走太远，想去有特色的书店…' : '例如：下午两点从武汉光谷广场出发，想喝咖啡散步，两个小时，步行…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />

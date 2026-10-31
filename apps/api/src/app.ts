@@ -137,7 +137,7 @@ export function createApp(options: AppOptions = {}) {
       if (previous?.fingerprint === fingerprint) { await sessionStore.put(record); return reply.send(previous.result); }
       if (previous) return reply.code(409).send(apiError(request.id, 'VERSION_CONFLICT', '同一轮请求不能使用不同内容，请重新发送。'));
       try {
-        const result = await handleTurn(record, body.data, { agent, nativeAgent, map, store, requestId: request.id });
+        const result = await handleTurn(record, body.data, { agent, nativeAgent, map, store, requestId: request.id, log: app.log });
         record.turns[body.data.turnId] = { fingerprint, result };
         await sessionStore.put(record);
         return reply.send(result);
@@ -282,7 +282,7 @@ function mergePreference(current: PreferenceExtraction, patch: PreferenceExtract
   return PreferenceExtractionSchema.parse(merged);
 }
 
-async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnRequestSchema>, deps: { agent: AgentOrchestrator; nativeAgent: AgentOrchestrator; map: MapProvider; store: PlanStore; requestId: string }): Promise<TurnResult> {
+async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnRequestSchema>, deps: { agent: AgentOrchestrator; nativeAgent: AgentOrchestrator; map: MapProvider; store: PlanStore; requestId: string; log: { info: (data: object, message: string) => void; warn: (data: object, message: string) => void } }): Promise<TurnResult> {
   const session = record.session;
   session.revision += 1;
   session.messages.push({ role: 'user', text: request.text, createdAt: new Date().toISOString() });
@@ -347,14 +347,17 @@ async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnReq
   catch (error) {
     if (!(error instanceof MapProviderError) && !(error instanceof PlannerError)) throw error;
     session.phase = error instanceof PlannerError ? 'no_route' : 'error';
-    const message = `${error.message} 已保留你的出行条件，可以调整条件或重试。`;
+    const diagnostics = error.diagnostics;
+    const message = error.message + (diagnostics ? ' ' + diagnostics.summary : '') + ' 已保留你的出行条件，可以调整条件或重试。';
     session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
-    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: [error.code], steps: ['已保存出行条件', '规划暂未完成'], actions: ['retry', 'adjust_preferences'] };
+    deps.log.warn({ requestId: deps.requestId, plannerRunId: diagnostics?.plannerRunId, planner: diagnostics, code: error.code }, 'planner did not produce a route');
+    return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: [error.code], steps: ['已保存出行条件', '规划暂未完成'], ...(diagnostics ? { planningDiagnostics: diagnostics } : {}), actions: ['retry', 'adjust_preferences'] };
   }
   await deps.store.putPlan({ ...generated, ownerSessionId: session.id });
   session.itineraryId = generated.itinerary.id; session.routeId = generated.itinerary.routes[0]?.id; session.itineraryIds = [...new Set([...session.itineraryIds, generated.itinerary.id])];
   session.phase = generated.itinerary.status === 'degraded' ? 'degraded' : 'complete';
   const message = decision.intent === 'regenerate' ? '已基于当前偏好生成另一组路线。' : '偏好已确认，已生成可对比路线。';
   session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
-  return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: generated.itinerary.routes.flatMap((r) => r.risks), steps: ['解析用户意图', '合并并校验偏好', '筛选 POI', 'Beam Search 组路', '校验路线约束'], itinerary: generated.itinerary, actions: ['compare', 'edit'] };
+  deps.log.info({ requestId: deps.requestId, plannerRunId: generated.diagnostics.plannerRunId, planner: generated.diagnostics }, 'planner completed');
+  return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: generated.itinerary.routes.flatMap((r) => r.risks), steps: ['解析用户意图', '合并并校验偏好', '筛选 POI', 'Beam Search 组路', '校验路线约束'], planningDiagnostics: generated.diagnostics, itinerary: generated.itinerary, actions: ['compare', 'edit'] };
 }

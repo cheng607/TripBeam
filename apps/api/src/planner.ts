@@ -1,12 +1,50 @@
 import { randomUUID } from 'node:crypto';
-import type { Coordinate, Itinerary, Place, Poi, PreferenceDraft, RouteLeg, TripRoute } from '@tripbeam/contracts';
+import type { Coordinate, Itinerary, Place, PlanningDiagnostics, Poi, PreferenceDraft, RouteLeg, TripRoute } from '@tripbeam/contracts';
 import { ItinerarySchema, RouteSchema } from '@tripbeam/contracts';
 import { MapProviderError, type MapProvider } from './maps.js';
 import { enrichExperienceRoute, experienceFocus, type ExperienceVariant } from './experience.js';
 
 export const POLICY_VERSION = 'experience-route-v2';
 export class PlannerError extends Error {
-  constructor(message: string, public readonly code: 'POI_INSUFFICIENT' | 'ROUTE_UNAVAILABLE' | 'CONSTRAINT_VIOLATION', public readonly details?: { totalDurationMinutes?: number; totalDistanceMeters?: number; excessMinutes?: number }) { super(message); }
+  constructor(
+    message: string,
+    public readonly code: 'POI_INSUFFICIENT' | 'ROUTE_UNAVAILABLE' | 'CONSTRAINT_VIOLATION',
+    public readonly details?: { totalDurationMinutes?: number; totalDistanceMeters?: number; excessMinutes?: number },
+    public readonly diagnostics?: PlanningDiagnostics,
+  ) { super(message); }
+}
+
+type PlannerRejectionReason = PlanningDiagnostics['rejections'][number]['reason'];
+type PlannerFinalReason = PlanningDiagnostics['finalReason'];
+const rejectionLabel: Record<PlannerRejectionReason, string> = {
+  DUPLICATE_SEQUENCE: '候选地点重复',
+  ROUTE_TOO_SIMILAR: '与已有路线过于相似',
+  TIME_BUDGET_EXCEEDED: '包含返程后超出可用时长',
+  ROUTE_LEG_UNAVAILABLE: '地图未返回可靠线路',
+  ROUTE_CONSTRAINT_VIOLATION: '未通过路线约束',
+  MAP_PROVIDER_UNAVAILABLE: '地图服务暂不可用',
+};
+
+class DiagnosticTracker {
+  readonly plannerRunId = randomUUID();
+  city: string | undefined;
+  readonly counts = { rawPois: 0, concretePois: 0, candidateSequences: 0, routeAttempts: 0, validRoutes: 0 };
+  private readonly rejections = new Map<PlannerRejectionReason, number>();
+
+  reject(reason: PlannerRejectionReason) {
+    this.rejections.set(reason, (this.rejections.get(reason) ?? 0) + 1);
+  }
+
+  snapshot(finalReason: PlannerFinalReason): PlanningDiagnostics {
+    const rejections = [...this.rejections.entries()].map(([reason, count]) => ({ reason, count }));
+    const primary = [...rejections].sort((a, b) => b.count - a.count)[0];
+    let summary: string;
+    if (finalReason === 'COMPLETED') summary = '已检索 ' + this.counts.concretePois + ' 个具体地点，尝试 ' + this.counts.routeAttempts + ' 条候选路线，生成 ' + this.counts.validRoutes + ' 条有效路线。';
+    else if (finalReason === 'POI_INSUFFICIENT') summary = '仅找到 ' + this.counts.concretePois + ' 个可用具体地点，少于生成对比路线所需数量。';
+    else if (finalReason === 'MAP_PROVIDER_UNAVAILABLE') summary = '已尝试 ' + this.counts.routeAttempts + ' 条候选路线，但地图服务在算路阶段暂不可用。';
+    else summary = '已检索 ' + this.counts.concretePois + ' 个具体地点，尝试 ' + this.counts.routeAttempts + ' 条候选路线，仅生成 ' + this.counts.validRoutes + ' 条有效路线' + (primary ? '；主要淘汰原因：' + rejectionLabel[primary.reason] + '（' + primary.count + ' 条）' : '') + '。';
+    return { plannerRunId: this.plannerRunId, ...(this.city ? { city: this.city } : {}), finalReason, counts: { ...this.counts }, rejections, summary };
+  }
 }
 
 export function haversineMeters(a: Coordinate, b: Coordinate): number {
@@ -208,12 +246,14 @@ export async function buildRoute(input: {
   return RouteSchema.parse(route);
 }
 
-export async function generateItinerary(preference: PreferenceDraft, map: MapProvider, previousSignatures: string[] = []): Promise<{ itinerary: Itinerary; candidates: Poi[]; city: string }> {
+export async function generateItinerary(preference: PreferenceDraft, map: MapProvider, previousSignatures: string[] = []): Promise<{ itinerary: Itinerary; candidates: Poi[]; city: string; diagnostics: PlanningDiagnostics }> {
+  const diagnostics = new DiagnosticTracker();
   const unsupportedConstraints = hardConstraintsWithoutEvidence(preference);
   if (unsupportedConstraints.length) {
     throw new PlannerError(`当前地点数据无法可靠验证以下硬约束：${unsupportedConstraints.join('、')}。请移除硬约束或等待具备可验证数据后再规划。`, 'CONSTRAINT_VIOLATION');
   }
   const { place: origin, city } = await map.resolve(preference.originLabel);
+  diagnostics.city = city;
   // Weather is helpful travel context but is not allowed to block route
   // generation when the optional provider request is temporarily unavailable.
   let weather;
@@ -221,6 +261,7 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
   const interests = [...new Set([...preference.playPreferences, ...(preference.customPreferences ?? []), ...(preference.mustHave ?? []), ...(preference.niceToHave ?? [])])];
   const raw = await map.nearby(origin, interests, { radiusMeters: searchRadiusMeters(preference) });
   const avoid = preference.avoid ?? [];
+  diagnostics.counts.rawPois = raw.length;
   const candidates = raw.filter((poi) => {
     const searchable = `${poi.name} ${poi.category} ${poi.metadata?.categoryPath ?? ''} ${(poi.metadata?.cuisineTags ?? []).join(' ')}`;
     return poi.stayMinutes >= 1 && !avoid.some((item) => searchable.includes(item));
@@ -230,7 +271,8 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
     throw new PlannerError(`当前高德地点详情中没有可验证满足以下必选条件的地点：${unverifiableMustHaves.join('、')}。请调整条件或改用具备该数据字段的来源。`, 'CONSTRAINT_VIOLATION');
   }
   const concreteCandidates = candidates.filter((poi) => poi.placeKind !== 'area');
-  if (concreteCandidates.length < 2) throw new PlannerError('附近缺少至少两个具体地点，无法生成可比较的路线；请调整出发点或偏好。', 'POI_INSUFFICIENT');
+  diagnostics.counts.concretePois = concreteCandidates.length;
+  if (concreteCandidates.length < 2) throw new PlannerError('附近缺少至少两个具体地点，无法生成可比较的路线；请调整出发点或偏好。', 'POI_INSUFFICIENT', undefined, diagnostics.snapshot('POI_INSUFFICIENT'));
   const routes: TripRoute[] = [];
   const signatures = new Set<string>();
   let providerFailure: MapProviderError | null = null;
@@ -238,28 +280,38 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
   for (const [themeIndex, definition] of variants.entries()) {
     const priority = focus[themeIndex] ?? focus[0] ?? '';
     const sequences = candidateSequences(candidates, origin, interests, priority, preference.availableMinutes, definition);
+    diagnostics.counts.candidateSequences += sequences.length;
     const alternatives = sequences.filter((pois) => !previousSignatures.includes(pois.map((poi) => poi.id).join('|')));
     const ordered = [...alternatives, ...sequences.filter((pois) => previousSignatures.includes(pois.map((poi) => poi.id).join('|')))];
     for (const pois of ordered.slice(0, 20)) {
       const signature = pois.map((poi) => poi.id).join('|');
-      if (signatures.has(signature) || routes.some((route) => routeSimilarity(route.pois, pois) > 0.5)) continue;
+      if (signatures.has(signature)) { diagnostics.reject('DUPLICATE_SEQUENCE'); continue; }
+      if (routes.some((route) => routeSimilarity(route.pois, pois) > 0.5)) { diagnostics.reject('ROUTE_TOO_SIMILAR'); continue; }
       if ((preference.mustHave ?? []).some((item) => !pois.some((poi) => poiMatchesMustHave(poi, item)))) continue;
       try {
+        diagnostics.counts.routeAttempts += 1;
         const route = await buildRoute({ origin, city, preference, pois, theme: definition.theme, title: definition.variant, map, mode: preference.travelPreferences[themeIndex % preference.travelPreferences.length] });
-        routes.push(enrichExperienceRoute(route, preference, definition.variant)); signatures.add(signature); break;
+        routes.push(enrichExperienceRoute(route, preference, definition.variant)); signatures.add(signature); diagnostics.counts.validRoutes += 1; break;
       } catch (error) {
         if (error instanceof MapProviderError) {
-          if (error.code === 'MAP_UNAVAILABLE' || error.code === 'MAP_NOT_CONFIGURED') { providerFailure = error; break; }
-        } else if (!(error instanceof PlannerError)) throw error;
+          if (error.code === 'MAP_UNAVAILABLE' || error.code === 'MAP_NOT_CONFIGURED') {
+            diagnostics.reject('MAP_PROVIDER_UNAVAILABLE');
+            error.diagnostics = diagnostics.snapshot('MAP_PROVIDER_UNAVAILABLE');
+            providerFailure = error; break;
+          }
+          diagnostics.reject('ROUTE_LEG_UNAVAILABLE');
+        } else if (error instanceof PlannerError) {
+          diagnostics.reject(error.details?.excessMinutes !== undefined ? 'TIME_BUDGET_EXCEEDED' : 'ROUTE_CONSTRAINT_VIOLATION');
+        } else throw error;
       }
     }
     if (providerFailure) break;
   }
   if (providerFailure) throw providerFailure;
-  if (routes.length < 2) throw new PlannerError('暂时无法生成两条差异足够明显且满足时间、路网约束的路线；请调整出发点、时间或偏好。', 'ROUTE_UNAVAILABLE');
+  if (routes.length < 2) throw new PlannerError('暂时无法生成两条差异足够明显且满足时间、路网约束的路线；请调整出发点、时间或偏好。', 'ROUTE_UNAVAILABLE', undefined, diagnostics.snapshot('INSUFFICIENT_DISTINCT_VALID_ROUTES'));
   const itinerary = ItinerarySchema.parse({
     id: randomUUID(), version: 1, preference, origin, routes, status: 'complete', weather,
     generatedAt: new Date().toISOString(), policyVersion: POLICY_VERSION, savedVersion: null,
   });
-  return { itinerary, candidates, city };
+  return { itinerary, candidates, city, diagnostics: diagnostics.snapshot('COMPLETED') };
 }
