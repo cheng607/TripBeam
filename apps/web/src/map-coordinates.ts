@@ -15,5 +15,6 @@ export function wgsToGcj({ lat, lng }: LatLng): LatLng {
 }
 
 export function displayCoordinate(coordinate: LatLng) {
-  return (import.meta.env.VITE_MAP_COORDINATE_SYSTEM ?? 'wgs84') === 'gcj02' ? wgsToGcj(coordinate) : coordinate;
+  // Planner data is WGS-84. Convert exactly once when it reaches the AMap canvas.
+  return wgsToGcj(coordinate);
 }

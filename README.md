@@ -4,9 +4,9 @@
 
 ## 本地启动
 
-要求 Node.js 22+、pnpm 11+。在项目根目录执行 `pnpm install`。**不要将 API Key 放入前端环境变量、提交到仓库或贴入聊天。已公开的密钥应先轮换。**
+要求 Node.js 22+、pnpm 11+。在项目根目录执行 `pnpm install`。**不要将服务端 Web 服务密钥放入前端环境变量、提交到仓库或贴入聊天。浏览器 JS API Key 必须设置域名白名单。已公开的服务端密钥应先轮换。**
 
-复制 `apps/api/.env.example` 为 `apps/api/.env`，在本机填写 `AMAP_WEB_KEY` 与轮换后的 `DEEPSEEK_API_KEY`。API 启动时自动读取 `apps/api/.env`；也可用部署环境变量注入。`DEEPSEEK_BASE_URL` 默认 `https://api.deepseek.com`，模型默认 `deepseek-chat`。前端可选复制 `apps/web/.env.example` 为 `apps/web/.env`，仅配置公开的 API 地址、底图 URL 与 attribution；**不要在 `VITE_*` 变量中放服务端密钥**。
+复制 `apps/api/.env.example` 为 `apps/api/.env`，在本机填写 `AMAP_WEB_KEY` 与轮换后的 `DEEPSEEK_API_KEY`。API 启动时自动读取 `apps/api/.env`；也可用部署环境变量注入。`DEEPSEEK_BASE_URL` 默认 `https://api.deepseek.com`，模型默认 `deepseek-chat`。前端可选复制 `apps/web/.env.example` 为 `apps/web/.env`，配置公开的 API 地址与高德地图 JS API Key；**不要在 `VITE_*` 变量中放服务端 Web 服务密钥**。
 
 ```powershell
 pnpm dev
