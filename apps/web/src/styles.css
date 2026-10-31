@@ -20,7 +20,7 @@
 /* Route editor: long place names must wrap without deforming numbered markers. */
 .stop-number{flex:0 0 28px;width:28px;height:28px;align-self:flex-start}
 .stop-details{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.45}
-.stop-details strong,.stop-details small{display:block}
+.stop-details strong,.stop-details small{display:block}.visit-role{display:inline-block;margin-right:5px;padding:1px 4px;border-radius:4px;background:#edf3e8;color:#5b795d;font-size:9px;font-style:normal;font-weight:650;line-height:1.35}.visit-role.supporting{background:#f2f3ef;color:#7d887d}
 .stop-details small{margin-top:3px}
 .stop-actions{flex:none;align-self:flex-start}
 

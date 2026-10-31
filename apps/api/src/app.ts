@@ -356,7 +356,9 @@ async function handleTurn(record: SessionRecord, request: z.infer<typeof TurnReq
   await deps.store.putPlan({ ...generated, ownerSessionId: session.id });
   session.itineraryId = generated.itinerary.id; session.routeId = generated.itinerary.routes[0]?.id; session.itineraryIds = [...new Set([...session.itineraryIds, generated.itinerary.id])];
   session.phase = generated.itinerary.status === 'degraded' ? 'degraded' : 'complete';
-  const message = decision.intent === 'regenerate' ? '已基于当前偏好生成另一组路线。' : '偏好已确认，已生成可对比路线。';
+  const message = generated.itinerary.status === 'degraded'
+    ? '已生成 1 条通过时间与路网校验的可出发路线；其余候选未满足当前条件。'
+    : decision.intent === 'regenerate' ? '已基于当前偏好生成另一组路线。' : '偏好已确认，已生成可对比路线。';
   session.messages.push({ role: 'assistant', text: message, createdAt: new Date().toISOString() });
   deps.log.info({ requestId: deps.requestId, plannerRunId: generated.diagnostics.plannerRunId, planner: generated.diagnostics }, 'planner completed');
   return { requestId: deps.requestId, session, intent: decision.intent, source, message, missingFields: [], fieldsToAsk: [], warnings: generated.itinerary.routes.flatMap((r) => r.risks), steps: ['解析用户意图', '合并并校验偏好', '筛选 POI', 'Beam Search 组路', '校验路线约束'], planningDiagnostics: generated.diagnostics, itinerary: generated.itinerary, actions: ['compare', 'edit'] };

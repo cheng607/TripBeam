@@ -27,7 +27,7 @@ export class DemoMapProvider implements MapProvider {
     return names.map((name, index): Poi => ({
       id: `demo-${index + 1}`, name, category: index % 2 ? '景点' : '餐饮', tags: [tags[index % tags.length]!],
       place: { label: name, address: '演示地址（非实时数据）', coordinate: { lat: origin.coordinate.lat + 0.004 * Math.cos(index), lng: origin.coordinate.lng + 0.004 * Math.sin(index) } },
-      stayMinutes: 25 + (index % 3) * 10,
+      stayMinutes: 25 + (index % 3) * 10, minStayMinutes: 15, maxStayMinutes: 60,
       placeKind: name.includes('步行区') ? 'area' : name.includes('公园') || name.includes('博物馆') || name.includes('观景') ? 'landmark' : 'venue',
     }));
   }
@@ -40,13 +40,13 @@ export class DemoMapProvider implements MapProvider {
   }
 }
 
-const themeQueries: Record<string, { query: string; category: string; stay: number }> = {
-  当地美食: { query: '特色餐饮', category: '餐饮', stay: 50 },
-  拍照散步: { query: '景点', category: '景点', stay: 35 },
-  文化展览: { query: '博物馆', category: '文化', stay: 55 },
-  自然放松: { query: '公园', category: '自然', stay: 40 },
-  逛街购物: { query: '商场', category: '购物', stay: 45 },
-  夜生活: { query: '夜市', category: '夜生活', stay: 45 },
+const themeQueries: Record<string, { query: string; category: string; stay: number; minStay: number; maxStay: number }> = {
+  当地美食: { query: '特色餐饮', category: '餐饮', stay: 50, minStay: 25, maxStay: 75 },
+  拍照散步: { query: '景点', category: '景点', stay: 35, minStay: 15, maxStay: 60 },
+  文化展览: { query: '博物馆', category: '文化', stay: 55, minStay: 30, maxStay: 90 },
+  自然放松: { query: '公园', category: '自然', stay: 40, minStay: 20, maxStay: 75 },
+  逛街购物: { query: '商场', category: '购物', stay: 45, minStay: 20, maxStay: 75 },
+  夜生活: { query: '夜市', category: '夜生活', stay: 45, minStay: 25, maxStay: 75 },
 };
 
 function classifyPlaceKind(name: string, category: string): NonNullable<Poi['placeKind']> {
@@ -175,7 +175,7 @@ export class AMapProvider implements MapProvider {
   }
 
   async nearby(origin: Place, preferences: string[], options?: { radiusMeters?: number }): Promise<Poi[]> {
-    const queries = preferences.slice(0, 8).map((preference) => ({ preference, ...themeQueries[preference] ?? { query: preference, category: '其他', stay: 35 } }));
+    const queries = preferences.slice(0, 8).map((preference) => ({ preference, ...themeQueries[preference] ?? { query: preference, category: '其他', stay: 35, minStay: 15, maxStay: 60 } }));
     if (!queries.some((item) => item.category === '景点')) queries.push({ preference: '拍照散步', ...themeQueries.拍照散步! });
     const radiusMeters = Math.max(1_000, Math.min(50_000, Math.round(options?.radiusMeters ?? 12_000)));
     const responses = await Promise.all(queries.map(async (item) => ({ item, data: await this.get('/v3/place/around', {
@@ -194,7 +194,7 @@ export class AMapProvider implements MapProvider {
       const averageCost = finiteNumber(detail.cost);
       found.set(id, { id, name, category: item.category, tags: [item.preference],
         place: { label: string(poi.name), address: string(poi.address) || string(poi.pname) || '地址待确认', coordinate: gcjToWgs(coordinate), providerId: id },
-        stayMinutes: item.stay, placeKind: classifyPlaceKind(name, item.category),
+        stayMinutes: item.stay, minStayMinutes: item.minStay, maxStayMinutes: item.maxStay, placeKind: classifyPlaceKind(name, item.category),
         metadata: {
           provider: 'amap', categoryPath: string(poi.type) || undefined, typeCode: string(poi.typecode) || undefined,
           cuisineTags: providerTags.length ? providerTags : undefined, rating: rating !== undefined && rating >= 0 && rating <= 5 ? rating : undefined,

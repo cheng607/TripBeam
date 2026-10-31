@@ -27,7 +27,9 @@ export function selectPois(plan: StoredPlan, routeId: string, command: EditComma
   if (!next.length || next.length > 8 || new Set(next).size !== next.length || next.some((id) => !byId.has(id))) throw new WorkflowError('编辑后需有 1–8 个不重复的已知地点。');
   return next.map((id) => {
     const poi = byId.get(id)!;
-    return stayUpdate?.poiId === id ? { ...poi, stayMinutes: stayUpdate.stayMinutes } : poi;
+    // A deliberate manual duration is a hard user choice for this revision;
+    // do not expand it back to the provider's suggested minimum on rebuild.
+    return stayUpdate?.poiId === id ? { ...poi, stayMinutes: stayUpdate.stayMinutes, minStayMinutes: stayUpdate.stayMinutes, maxStayMinutes: stayUpdate.stayMinutes } : poi;
   });
 }
 

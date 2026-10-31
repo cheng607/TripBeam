@@ -96,6 +96,55 @@ describe('deterministic planning API', () => {
     await app.close();
   });
 
+  it('compresses a recommended stop duration only after real road-network legs have been checked', async () => {
+    const longVisit: Poi = { ...candidates[0]!, id: 'long-visit', stayMinutes: 90, minStayMinutes: 20, maxStayMinutes: 120 };
+    const measuredMap: MapProvider = {
+      ...map,
+      leg: async (from, to, mode) => ({ fromId: from.label, toId: to.label, mode, durationMinutes: 15, distanceMeters: 900, geometry: [from.coordinate, to.coordinate] }),
+    };
+    const route = await buildRoute({ origin, city: '成都', preference: { ...preference, availableMinutes: 100 }, pois: [longVisit], theme: 'balanced', title: '动态停留', map: measuredMap });
+    expect(route.totalDurationMinutes).toBe(100);
+    expect(route.pois[0]!.stayMinutes).toBe(60);
+    expect(route.scheduledStops[0]).toMatchObject({ arrivalMinuteOffset: 15, departureMinuteOffset: 75 });
+  });
+
+  it('keeps the selected place combination and gives its core destination more of the dwell budget', async () => {
+    const selectedPlaces: Poi[] = [
+      { ...candidates[0]!, id: 'core-food', stayMinutes: 70, minStayMinutes: 20, tags: ['当地美食'] },
+      { ...candidates[1]!, id: 'supporting-walk', stayMinutes: 70, minStayMinutes: 20, tags: ['拍照散步'] },
+    ];
+    const route = await buildRoute({ origin, city: '成都', preference: { ...preference, availableMinutes: 100, playPreferences: ['当地美食'] }, pois: selectedPlaces, theme: 'balanced', title: '地点优先', map });
+    const core = route.pois.find((poi) => poi.visitRole === 'core')!;
+    const supporting = route.pois.find((poi) => poi.visitRole === 'supporting')!;
+    expect(core.id).toBe('core-food');
+    expect(core.stayMinutes).toBeGreaterThan(supporting.stayMinutes);
+    expect(route.totalDurationMinutes).toBe(100);
+  });
+
+  it('returns one verified route as a usable degraded itinerary instead of discarding it', async () => {
+    const singleViable: Poi[] = [
+      { ...candidates[0]!, id: 'nearby-food', stayMinutes: 30 },
+      { ...candidates[1]!, id: 'far-park', stayMinutes: 30 },
+    ];
+    const oneRouteMap: MapProvider = {
+      ...map,
+      nearby: async () => singleViable,
+      leg: async (from, to, mode) => {
+        const touchesFarPark = from.label === '城市公园' || to.label === '城市公园';
+        return { fromId: from.label, toId: to.label, mode, durationMinutes: touchesFarPark ? 100 : 6, distanceMeters: 450, geometry: [from.coordinate, to.coordinate] };
+      },
+    };
+    const folder = await mkdtemp(join(tmpdir(), 'tripbeam-test-')); folders.push(folder);
+    const app = createApp({ map: oneRouteMap, store: new FilePlanStore(join(folder, 'plans.json')) });
+    const response = await app.inject({ method: 'POST', url: '/v1/itineraries/generate', payload: preference });
+    expect(response.statusCode).toBe(201);
+    const trip = GenerateResponseSchema.parse(response.json()).itinerary;
+    expect(trip).toMatchObject({ status: 'degraded' });
+    expect(trip.routes).toHaveLength(1);
+    expect(trip.routes[0]!.constraintStatus).toBe('valid');
+    await app.close();
+  });
+
   it('closes the route with a return leg and keeps buffer separate from remaining time', async () => {
     const route = await buildRoute({ origin, city: '成都', preference, pois: candidates.slice(0, 2), theme: 'balanced', title: '闭环路线', map });
     expect(route.returnsToOrigin).toBe(true);

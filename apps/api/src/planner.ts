@@ -4,7 +4,7 @@ import { ItinerarySchema, RouteSchema } from '@tripbeam/contracts';
 import { MapProviderError, type MapProvider } from './maps.js';
 import { enrichExperienceRoute, experienceFocus, type ExperienceVariant } from './experience.js';
 
-export const POLICY_VERSION = 'experience-route-v2';
+export const POLICY_VERSION = 'experience-route-v3';
 export class PlannerError extends Error {
   constructor(
     message: string,
@@ -40,6 +40,7 @@ class DiagnosticTracker {
     const primary = [...rejections].sort((a, b) => b.count - a.count)[0];
     let summary: string;
     if (finalReason === 'COMPLETED') summary = '已检索 ' + this.counts.concretePois + ' 个具体地点，尝试 ' + this.counts.routeAttempts + ' 条候选路线，生成 ' + this.counts.validRoutes + ' 条有效路线。';
+    else if (finalReason === 'DEGRADED') summary = '已检索 ' + this.counts.concretePois + ' 个具体地点，尝试 ' + this.counts.routeAttempts + ' 条候选路线，生成 1 条可出发路线；其余候选未通过路网或时间校验。';
     else if (finalReason === 'POI_INSUFFICIENT') summary = '仅找到 ' + this.counts.concretePois + ' 个可用具体地点，少于生成对比路线所需数量。';
     else if (finalReason === 'MAP_PROVIDER_UNAVAILABLE') summary = '已尝试 ' + this.counts.routeAttempts + ' 条候选路线，但地图服务在算路阶段暂不可用。';
     else summary = '已检索 ' + this.counts.concretePois + ' 个具体地点，尝试 ' + this.counts.routeAttempts + ' 条候选路线，仅生成 ' + this.counts.validRoutes + ' 条有效路线' + (primary ? '；主要淘汰原因：' + rejectionLabel[primary.reason] + '（' + primary.count + ' 条）' : '') + '。';
@@ -125,7 +126,60 @@ function rank(poi: Poi, origin: Place, preferences: string[], priority: string, 
   return preferenceScore * strategy.focusWeight + themeScore + poi.stayMinutes * strategy.stayWeight + providerQuality - originCost - areaPenalty;
 }
 
-function candidateSequences(candidates: Poi[], origin: Place, preferences: string[], priority: string, availableMinutes: number, strategy: RouteStrategy): Poi[][] {
+function minimumStayMinutes(poi: Poi): number {
+  // Older stored POIs do not yet have a range. Keep them compatible while
+  // allowing a short, meaningful visit instead of treating a recommendation
+  // as a hard scheduling constraint.
+  const fallback = Math.max(10, Math.ceil(poi.stayMinutes * 0.45));
+  return Math.min(poi.stayMinutes, poi.minStayMinutes ?? fallback);
+}
+
+function recommendedStayMinutes(poi: Poi): number {
+  return Math.max(minimumStayMinutes(poi), poi.stayMinutes);
+}
+
+function allocateStayMinutes(pois: Poi[], dwellBudget: number): number[] {
+  const minimums = pois.map(minimumStayMinutes);
+  const recommended = pois.map(recommendedStayMinutes);
+  const availableExtra = Math.max(0, dwellBudget - minimums.reduce((sum, minutes) => sum + minutes, 0));
+  const capacities = recommended.map((minutes, index) => minutes - minimums[index]!);
+  const totalCapacity = capacities.reduce((sum, minutes) => sum + minutes, 0);
+  if (!totalCapacity || !availableExtra) return minimums;
+  const extraToAssign = Math.min(availableExtra, totalCapacity);
+  const priority = pois.map((poi) => poi.visitRole === 'core' ? 2.5 : 1);
+  const weightedCapacity = capacities.map((minutes, index) => minutes * priority[index]!);
+  const totalWeightedCapacity = weightedCapacity.reduce((sum, minutes) => sum + minutes, 0);
+  const assigned = minimums.map((minutes, index) => minutes + Math.min(capacities[index]!, Math.floor(extraToAssign * weightedCapacity[index]! / totalWeightedCapacity)));
+  let remainder = extraToAssign - assigned.reduce((sum, minutes, index) => sum + minutes - minimums[index]!, 0);
+  const assignmentOrder = pois.map((poi, index) => index).sort((left, right) => priority[right]! - priority[left]!);
+  while (remainder > 0) for (const index of assignmentOrder) {
+    if (assigned[index]! < recommended[index]!) { assigned[index]! += 1; remainder -= 1; }
+    if (!remainder) break;
+  }
+  return assigned;
+}
+
+function locationCombinationScore(pois: Poi[], preferences: string[], priority: string, availableMinutes: number): number {
+  const coveredPreferences = new Set(pois.flatMap((poi) => poi.tags.filter((tag) => preferences.includes(tag))));
+  const primaryMatches = pois.filter((poi) => poi.tags.includes(priority)).length;
+  const categoryVariety = new Set(pois.map((poi) => poi.category)).size;
+  const quality = pois.reduce((sum, poi) => sum + (poi.metadata?.rating ?? 3) * 2, 0);
+  const idealStopCount = availableMinutes <= 90 ? 1 : availableMinutes <= 180 ? 2 : 3;
+  return coveredPreferences.size * 70 + primaryMatches * 40 + categoryVariety * 12 + quality - Math.abs(pois.length - idealStopCount) * 16;
+}
+
+function assignVisitRoles(pois: Poi[], preference: PreferenceDraft): Poi[] {
+  const interests = [...preference.playPreferences, ...(preference.customPreferences ?? []), ...(preference.mustHave ?? [])];
+  const scored = pois.map((poi, index) => ({
+    index,
+    score: poi.tags.filter((tag) => interests.includes(tag)).length * 20 + (poi.metadata?.rating ?? 3),
+  })).sort((left, right) => right.score - left.score || left.index - right.index);
+  const coreCount = Math.min(pois.length, Math.max(1, Math.ceil(pois.length / 2)));
+  const coreIds = new Set(scored.slice(0, coreCount).map(({ index }) => pois[index]!.id));
+  return pois.map((poi) => ({ ...poi, visitRole: coreIds.has(poi.id) ? 'core' as const : 'supporting' as const }));
+}
+
+function candidateSequences(candidates: Poi[], origin: Place, preferences: string[], priority: string, strategy: RouteStrategy): Poi[][] {
   // Keep a broader candidate set so a highly ranked POI cannot monopolize every route.
   const ranked = [...candidates].sort((a, b) => rank(b, origin, preferences, priority, strategy) - rank(a, origin, preferences, priority, strategy)).slice(0, 36);
   const beam: Array<{ pois: Poi[]; score: number; estimatedMinutes: number }> = [{ pois: [], score: 0, estimatedMinutes: 0 }];
@@ -139,8 +193,10 @@ function candidateSequences(candidates: Poi[], origin: Place, preferences: strin
       if (poi.placeKind === 'area' && (state.pois.length === 0 || state.pois.some((item) => item.placeKind === 'area'))) continue;
       const previous = state.pois.at(-1)?.place ?? origin;
       const distance = haversineMeters(previous.coordinate, poi.place.coordinate);
-      const estimate = state.estimatedMinutes + poi.stayMinutes + Math.ceil(distance / 70) + BUFFER_MINUTES;
-      if (estimate > Math.min(240, availableMinutes + 30)) continue;
+      // This stage selects coherent place combinations only. It deliberately
+      // avoids using recommended dwell time as a routing constraint; the real
+      // road-network and timetable checks happen after a combination is chosen.
+      const estimate = state.estimatedMinutes + Math.ceil(distance / 70);
       const categoryNovelty = state.pois.some((item) => item.category === poi.category) ? 0 : strategy.varietyBonus;
       next.push({ pois: [...state.pois, poi], estimatedMinutes: estimate, score: state.score + rank(poi, origin, preferences, priority, strategy) - distance / 120 * strategy.legPenalty + categoryNovelty });
     }
@@ -180,56 +236,75 @@ export async function buildRoute(input: {
   }
   const mode = input.mode ?? preference.travelPreferences[0]!;
   if (!preference.travelPreferences.includes(mode)) throw new PlannerError('出行方式不在用户偏好中。', 'CONSTRAINT_VIOLATION');
+  // The selected places form the trip first. Their roles are then used only by
+  // the timetable allocator, so a supporting stop gives way before a core one.
+  const routePois = assignVisitRoles(pois, preference);
   const tripDate = preference.tripDate ?? chinaToday();
   const assumedTripDate = !preference.tripDate;
   const transitStrategy = preference.mobilityPolicy === 'hard' || preference.party === 'senior' || preference.party === 'wheelchair' ? 'least_walking' as const : 'fastest' as const;
-  let elapsed = 0;
-  const legs: RouteLeg[] = [];
-  const scheduledStops: TripRoute['scheduledStops'] = [];
-  for (const [index, poi] of pois.entries()) {
-    const from = index ? pois[index - 1]!.place : origin;
-    const requestedDeparture = departureAt(tripDate, preference.startTime, elapsed);
+  // Query the road network at each stop's shortest meaningful duration first.
+  // A POI's recommended stay is a scheduling preference, not a hard reason to
+  // discard a route before its real travel time has been checked.
+  let minimumTimelineOffset = 0;
+  const rawLegs: RouteLeg[] = [];
+  for (const [index, poi] of routePois.entries()) {
+    const from = index ? routePois[index - 1]!.place : origin;
+    const requestedDeparture = departureAt(tripDate, preference.startTime, minimumTimelineOffset);
     const rawLeg = await map.leg(from, poi.place, mode, city, {
-      departureDate: requestedDeparture.date, departureTime: requestedDeparture.time, departureMinuteOffset: elapsed,
+      departureDate: requestedDeparture.date, departureTime: requestedDeparture.time, departureMinuteOffset: minimumTimelineOffset,
       transitStrategy, includeNightService: requestedDeparture.time >= '20:00' || requestedDeparture.time < '06:00',
     });
-    const departureMinuteOffset = elapsed;
-    elapsed += rawLeg.durationMinutes;
-    const arrivalMinuteOffset = elapsed;
-    legs.push({ ...rawLeg, fromId: index ? pois[index - 1]!.id : 'origin', toId: poi.id, plannedDepartureMinuteOffset: departureMinuteOffset, plannedArrivalMinuteOffset: arrivalMinuteOffset });
-    elapsed += poi.stayMinutes;
-    scheduledStops.push({ poiId: poi.id, arrivalMinuteOffset, departureMinuteOffset: elapsed, arrivalTime: clockTime(preference.startTime, arrivalMinuteOffset), departureTime: clockTime(preference.startTime, elapsed) });
+    rawLegs.push(rawLeg);
+    minimumTimelineOffset += rawLeg.durationMinutes + minimumStayMinutes(poi);
   }
   // The operational buffer is a real part of the timeline, before the return
   // journey, rather than an alias for the time left unused by the user.
-  elapsed += BUFFER_MINUTES;
-  const returnDepartureMinuteOffset = elapsed;
-  const lastPoi = pois.at(-1)!;
-  const returnDeparture = departureAt(tripDate, preference.startTime, returnDepartureMinuteOffset);
+  minimumTimelineOffset += BUFFER_MINUTES;
+  const lastPoi = routePois.at(-1)!;
+  const returnDeparture = departureAt(tripDate, preference.startTime, minimumTimelineOffset);
   const rawReturnLeg = await map.leg(lastPoi.place, origin, mode, city, {
-    departureDate: returnDeparture.date, departureTime: returnDeparture.time, departureMinuteOffset: returnDepartureMinuteOffset,
+    departureDate: returnDeparture.date, departureTime: returnDeparture.time, departureMinuteOffset: minimumTimelineOffset,
     transitStrategy, includeNightService: returnDeparture.time >= '20:00' || returnDeparture.time < '06:00',
   });
-  elapsed += rawReturnLeg.durationMinutes;
-  legs.push({ ...rawReturnLeg, fromId: lastPoi.id, toId: 'origin', plannedDepartureMinuteOffset: returnDepartureMinuteOffset, plannedArrivalMinuteOffset: elapsed });
-  const totalDurationMinutes = elapsed;
-  const totalDistanceMeters = legs.reduce((sum, leg) => sum + leg.distanceMeters, 0);
-  const totalWalkingDistanceMeters = legs.reduce((sum, leg) => sum + (leg.walkingDistanceMeters ?? (leg.mode === '步行' ? leg.distanceMeters : 0)), 0);
+  const rawTravelMinutes = [...rawLegs, rawReturnLeg].reduce((sum, leg) => sum + leg.durationMinutes, 0);
   const plannedLimit = preference.timePolicy === 'flexible'
     ? Math.min(240, preference.availableMinutes + 30)
     : Math.min(preference.availableMinutes, 240);
-  if (totalDurationMinutes > plannedLimit) {
-    const excessMinutes = totalDurationMinutes - plannedLimit;
-    throw new PlannerError(`路线超出可用时长 ${excessMinutes} 分钟，请减少停靠点。`, 'CONSTRAINT_VIOLATION', { totalDurationMinutes, totalDistanceMeters, excessMinutes });
+  const minimumStayTotal = routePois.reduce((sum, poi) => sum + minimumStayMinutes(poi), 0);
+  const minimumTotalDuration = rawTravelMinutes + BUFFER_MINUTES + minimumStayTotal;
+  if (minimumTotalDuration > plannedLimit) {
+    const excessMinutes = minimumTotalDuration - plannedLimit;
+    throw new PlannerError(`路线超出可用时长 ${excessMinutes} 分钟，请减少停靠点。`, 'CONSTRAINT_VIOLATION', { totalDurationMinutes: minimumTotalDuration, totalDistanceMeters: [...rawLegs, rawReturnLeg].reduce((sum, leg) => sum + leg.distanceMeters, 0), excessMinutes });
   }
+  const plannedStayMinutes = allocateStayMinutes(routePois, plannedLimit - rawTravelMinutes - BUFFER_MINUTES);
+  const scheduledPois = routePois.map((poi, index) => ({ ...poi, stayMinutes: plannedStayMinutes[index]! }));
+  let elapsed = 0;
+  const legs: RouteLeg[] = [];
+  const scheduledStops: TripRoute['scheduledStops'] = [];
+  for (const [index, poi] of scheduledPois.entries()) {
+    const rawLeg = rawLegs[index]!;
+    const departureMinuteOffset = elapsed;
+    elapsed += rawLeg.durationMinutes;
+    const arrivalMinuteOffset = elapsed;
+    legs.push({ ...rawLeg, fromId: index ? scheduledPois[index - 1]!.id : 'origin', toId: poi.id, plannedDepartureMinuteOffset: departureMinuteOffset, plannedArrivalMinuteOffset: arrivalMinuteOffset });
+    elapsed += poi.stayMinutes;
+    scheduledStops.push({ poiId: poi.id, arrivalMinuteOffset, departureMinuteOffset: elapsed, arrivalTime: clockTime(preference.startTime, arrivalMinuteOffset), departureTime: clockTime(preference.startTime, elapsed) });
+  }
+  elapsed += BUFFER_MINUTES;
+  const returnDepartureMinuteOffset = elapsed;
+  elapsed += rawReturnLeg.durationMinutes;
+  legs.push({ ...rawReturnLeg, fromId: scheduledPois.at(-1)!.id, toId: 'origin', plannedDepartureMinuteOffset: returnDepartureMinuteOffset, plannedArrivalMinuteOffset: elapsed });
+  const totalDurationMinutes = elapsed;
+  const totalDistanceMeters = legs.reduce((sum, leg) => sum + leg.distanceMeters, 0);
+  const totalWalkingDistanceMeters = legs.reduce((sum, leg) => sum + (leg.walkingDistanceMeters ?? (leg.mode === '步行' ? leg.distanceMeters : 0)), 0);
   const exceededPreferredTime = totalDurationMinutes > preference.availableMinutes;
   const remainingMinutes = Math.max(0, preference.availableMinutes - totalDurationMinutes);
   const route = {
-    id: randomUUID(), theme, title, pois, legs, scheduledStops, totalDurationMinutes, totalDistanceMeters,
+    id: randomUUID(), theme, title, pois: scheduledPois, legs, scheduledStops, totalDurationMinutes, totalDistanceMeters,
     endPlace: origin, returnsToOrigin: true, endArrivalMinuteOffset: elapsed, endArrivalTime: clockTime(preference.startTime, elapsed),
     bufferMinutes: BUFFER_MINUTES, remainingMinutes, totalWalkingDistanceMeters,
     walkingIntensity: (totalWalkingDistanceMeters < 1800 ? 'low' : totalWalkingDistanceMeters < 4000 ? 'medium' : 'high') as TripRoute['walkingIntensity'],
-    constraintStatus: 'valid' as const, recommendationReason: reason(title, pois, mode),
+    constraintStatus: 'valid' as const, recommendationReason: reason(title, scheduledPois, mode),
     risks: [
       'OPENING_HOURS_UNCERTAIN' as const,
       // AMap's current adapter does not provide a departure-time traffic
@@ -238,7 +313,7 @@ export async function buildRoute(input: {
       'TRAFFIC_TIME_UNCERTAIN' as const,
       ...(assumedTripDate && legs.some((leg) => leg.mode === '公共交通') ? ['TRIP_DATE_ASSUMED' as const] : []),
       ...(hasUnverifiedPreference(preference) ? ['PREFERENCE_UNVERIFIED' as const] : []),
-      ...(pois.some((poi) => poi.place.address === '地址待确认') ? ['POI_DATA_PARTIAL' as const] : []),
+      ...(scheduledPois.some((poi) => poi.place.address === '地址待确认') ? ['POI_DATA_PARTIAL' as const] : []),
       ...(remainingMinutes < 20 ? ['ROUTE_TIME_TIGHT' as const] : []),
       ...(exceededPreferredTime ? ['PREFERENCE_RELAXED' as const] : []),
     ],
@@ -279,11 +354,18 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
   const focus = experienceFocus(preference);
   for (const [themeIndex, definition] of variants.entries()) {
     const priority = focus[themeIndex] ?? focus[0] ?? '';
-    const sequences = candidateSequences(candidates, origin, interests, priority, preference.availableMinutes, definition);
+    const sequences = candidateSequences(candidates, origin, interests, priority, definition)
+      .sort((left, right) => locationCombinationScore(right, interests, priority, preference.availableMinutes) - locationCombinationScore(left, interests, priority, preference.availableMinutes));
     diagnostics.counts.candidateSequences += sequences.length;
     const alternatives = sequences.filter((pois) => !previousSignatures.includes(pois.map((poi) => poi.id).join('|')));
     const ordered = [...alternatives, ...sequences.filter((pois) => previousSignatures.includes(pois.map((poi) => poi.id).join('|')))];
-    for (const pois of ordered.slice(0, 20)) {
+    // Once a route exists, surface the least-overlapping candidates first.
+    // This keeps the bounded provider-call budget from being consumed by many
+    // near-identical high-score sequences.
+    const diverseFirst = routes.length
+      ? [...ordered].sort((left, right) => Math.max(...routes.map((route) => routeSimilarity(route.pois, left))) - Math.max(...routes.map((route) => routeSimilarity(route.pois, right))))
+      : ordered;
+    for (const pois of diverseFirst.slice(0, 20)) {
       const signature = pois.map((poi) => poi.id).join('|');
       if (signatures.has(signature)) { diagnostics.reject('DUPLICATE_SEQUENCE'); continue; }
       if (routes.some((route) => routeSimilarity(route.pois, pois) > 0.5)) { diagnostics.reject('ROUTE_TOO_SIMILAR'); continue; }
@@ -308,10 +390,11 @@ export async function generateItinerary(preference: PreferenceDraft, map: MapPro
     if (providerFailure) break;
   }
   if (providerFailure) throw providerFailure;
-  if (routes.length < 2) throw new PlannerError('暂时无法生成两条差异足够明显且满足时间、路网约束的路线；请调整出发点、时间或偏好。', 'ROUTE_UNAVAILABLE', undefined, diagnostics.snapshot('INSUFFICIENT_DISTINCT_VALID_ROUTES'));
+  if (!routes.length) throw new PlannerError('暂时无法生成满足时间和路网约束的路线；请调整出发点、时间或偏好。', 'ROUTE_UNAVAILABLE', undefined, diagnostics.snapshot('INSUFFICIENT_DISTINCT_VALID_ROUTES'));
+  const status = routes.length < 2 ? 'degraded' : 'complete';
   const itinerary = ItinerarySchema.parse({
-    id: randomUUID(), version: 1, preference, origin, routes, status: 'complete', weather,
+    id: randomUUID(), version: 1, preference, origin, routes, status, weather,
     generatedAt: new Date().toISOString(), policyVersion: POLICY_VERSION, savedVersion: null,
   });
-  return { itinerary, candidates, city, diagnostics: diagnostics.snapshot('COMPLETED') };
+  return { itinerary, candidates, city, diagnostics: diagnostics.snapshot(status === 'degraded' ? 'DEGRADED' : 'COMPLETED') };
 }

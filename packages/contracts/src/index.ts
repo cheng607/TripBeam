@@ -96,7 +96,15 @@ export const PoiSchema = z.object({
   placeKind: z.enum(['venue', 'landmark', 'area', 'connector']).optional(),
   // A place can be a short connector (viewpoint, historic facade, market stall),
   // so it must not be excluded merely because it is not a 10-minute destination.
+  // stayMinutes is the planned duration for this particular route. Providers
+  // may also supply a feasible range so the planner can shorten a stop before
+  // rejecting an otherwise valid, real-road-network route.
   stayMinutes: z.number().int().min(1).max(180),
+  minStayMinutes: z.number().int().min(1).max(180).optional(),
+  maxStayMinutes: z.number().int().min(1).max(180).optional(),
+  // Derived after a location combination has been selected. This lets the UI
+  // distinguish a destination that carries the trip from a useful stop en route.
+  visitRole: z.enum(['core', 'supporting']).optional(),
   metadata: PoiMetadataSchema.optional(),
 }).strict();
 export const PoiInsightSchema = z.object({
@@ -215,7 +223,7 @@ export const PlannerRejectionReasonSchema = z.enum([
 export const PlanningDiagnosticsSchema = z.object({
   plannerRunId: z.string().uuid(),
   city: z.string().min(1).max(80).optional(),
-  finalReason: z.enum(['COMPLETED', 'POI_INSUFFICIENT', 'INSUFFICIENT_DISTINCT_VALID_ROUTES', 'MAP_PROVIDER_UNAVAILABLE']),
+  finalReason: z.enum(['COMPLETED', 'DEGRADED', 'POI_INSUFFICIENT', 'INSUFFICIENT_DISTINCT_VALID_ROUTES', 'MAP_PROVIDER_UNAVAILABLE']),
   counts: z.object({
     rawPois: z.number().int().nonnegative(),
     concretePois: z.number().int().nonnegative(),
