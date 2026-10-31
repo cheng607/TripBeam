@@ -159,6 +159,17 @@ h1, .planner-main h1, .decision-header h1, .editor-top h1, .share-heading h1,
   .editor-map .real-map { min-height: 390px; }
 }
 @media (max-width: 820px) {
+  /* The later desktop visual passes also define this grid. Reassert a single
+     content track here so tablets and phones never inherit the two-pane frame. */
+  .conversation-shell { width: 100%; min-width: 0; }
+  .planner-layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 680px;
+    gap: 28px;
+    align-items: start;
+  }
+  .planner-main, .planner-sidebar { width: 100%; min-width: 0; }
+  .planner-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sunlit-scene svg { height: 145px; }
   .timeline-stop { min-width: 220px; }
   .editor-map { grid-row: auto; }
@@ -166,7 +177,34 @@ h1, .planner-main h1, .decision-header h1, .editor-top h1, .share-heading h1,
 }
 @media (max-width: 640px) {
   body { background: linear-gradient(180deg, #f1f7eb 0, #fffdf6 230px, #fffdf6 100%); }
-  .planner-layout { padding-top: 30px; }
+  .page-shell, .app-shell { width: 100%; min-width: 0; overflow-x: clip; }
+  .planner-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    padding-top: 30px;
+  }
+  .planner-main { min-width: 0; }
+  .planner-main h1 {
+    max-width: 100%;
+    margin-bottom: 14px;
+    font-size: clamp(34px, 10.25vw, 42px);
+    line-height: 1.2;
+    letter-spacing: -.045em;
+    overflow-wrap: normal;
+    word-break: keep-all;
+  }
+  .planner-main .intro { max-width: 100%; }
+  .planner-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 8px;
+    border-radius: 14px 4px 14px 14px;
+  }
+  .preference-summary { padding: 16px 14px; }
+  .preference-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; }
+  .preference-summary dl .brief-row:first-child { grid-column: 1 / -1; }
+  .brief-row > button, .brief-row > div { min-width: 0; padding: 11px 0; gap: 8px; }
+  .brief-row dd { overflow-wrap: anywhere; }
   .sunlit-scene { margin-top: 18px; }
   .sunlit-scene svg { height: 122px; }
   .sunlit-scene figcaption { font-size: 9px; }
@@ -183,4 +221,26 @@ h1, .planner-main h1, .decision-header h1, .editor-top h1, .share-heading h1,
   .brand-mark { width: 32px; height: 32px; flex-basis: 32px; }
   .brand-mark svg { width: 28px; height: 28px; }
   .brand-wordmark { font-size: 16px; }
+}
+
+@media (max-width: 360px) {
+  .planner-journey ol {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+    width: 100%;
+  }
+  .planner-journey li,
+  .planner-journey li > a,
+  .planner-journey li > div {
+    min-width: 0;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 3px;
+    text-align: center;
+    white-space: normal;
+  }
+  .planner-journey li { font-size: 8px; line-height: 1.25; }
+  .planner-journey li span { width: 18px; height: 18px; font-size: 8px; }
+  .planner-journey li:not(:last-child)::after { display: none; }
 }
